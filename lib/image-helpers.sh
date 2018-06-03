@@ -108,12 +108,17 @@ customize_image()
 	cp $SRC/userpatches/customize-image.sh $SDCARD/tmp/customize-image.sh
 	chmod +x $SDCARD/tmp/customize-image.sh
 	mkdir -p $SDCARD/tmp/overlay
+	mkdir -p $SDCARD/tmp/cache
 	# util-linux >= 2.27 required
 	mount -o bind,ro $SRC/userpatches/overlay $SDCARD/tmp/overlay
+	mkdir -p $SRC/userpatches/cache
+	mount -o bind,rw $SRC/userpatches/cache $SDCARD/tmp/cache
 	display_alert "Calling image customization script" "customize-image.sh" "info"
 	chroot $SDCARD /bin/bash -c "/tmp/customize-image.sh $RELEASE $LINUXFAMILY $BOARD $BUILD_DESKTOP"
 	umount $SDCARD/tmp/overlay
+	umount $SDCARD/tmp/cache
 	mountpoint -q $SDCARD/tmp/overlay || rm -r $SDCARD/tmp/overlay
+	mountpoint -q $SDCARD/tmp/cache || rm -r $SDCARD/tmp/cache
 } #############################################################################
 
 install_deb_chroot()

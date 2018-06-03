@@ -339,7 +339,7 @@ prepare_partitions()
 			btrfs)
 				# Used for server images, currently no swap functionality, so disk space
 				# requirements are rather low since rootfs gets filled with compress-force=zlib
-				local sdsize=$(bc -l <<< "scale=0; (($imagesize * 0.8) / 4 + 1) * 4")
+				local sdsize=$(bc -l <<< "scale=0; (($imagesize * 1.0) / 4 + 1) * 4")
 				;;
 			*)
 				# Hardcoded overhead +40% and +128MB for ext4 is needed for desktop images,
@@ -431,8 +431,46 @@ prepare_partitions()
 		
 		# mount root device
 		[[ $ROOTFS_TYPE == ext4 ]] && tune2fs -o journal_data_writeback $rootdevice > /dev/null
-		[[ $ROOTFS_TYPE == btrfs ]] && local fscreateopt="-o compress-force=zlib"
-		mount ${fscreateopt} $rootdevice $MOUNT/
+		
+		# force compression on btrfs
+		if [[ $ROOTFS_TYPE == btrfs ]]; then 
+			# see https://btrfs.wiki.kernel.org/index.php/Compression
+			case $BTRFS_COMPRESSION in
+				lzo)  local fscreateopt="-o compress-force=lzo";;
+				zstd) local fscreateopt="-o compress-force=zstd";;
+				*)    local fscreateopt="-o compress-force=zlib";;
+			esac
+		fi
+		# create btrfs subvolumes
+		if [[ $ROOTFS_TYPE == btrfs && ${BTRFS_SUBVOLUMES^^} == YES ]]; then
+			
+			rm -rf ${MOUNT}_btrfsroot 2>/dev/null
+			mkdir -p ${MOUNT}_btrfsroot	
+			mount ${fscreateopt} $rootdevice ${MOUNT}_btrfsroot/
+
+			# using a flat layout, see https://btrfs.wiki.kernel.org/index.php/SysadminGuide#Layout	
+			btrfs subvolume create ${MOUNT}_btrfsroot/@
+			btrfs subvolume create ${MOUNT}_btrfsroot/@home
+			btrfs subvolume create ${MOUNT}_btrfsroot/@var	
+			btrfs subvolume create ${MOUNT}_btrfsroot/@varlib
+			
+			# set default subvolume for root tree, because subvolume argument can't be specified in uboot command line
+			btrfs subvolume set-default $(btrfs subvolume list ${MOUNT}_btrfsroot | grep @$ | awk '{print $2}') ${MOUNT}_btrfsroot/@
+
+			# mount subvolumes
+			mount -o defaults,noatime,nodiratime,compress-force=zlib,subvol=@ $rootdevice $MOUNT/
+			#mkdir -p $MOUNT/home
+			mount -o defaults,noatime,nodiratime,compress-force=zlib,subvol=@home,x-mount.mkdir $rootdevice $MOUNT/home 
+			#mkdir -p $MOUNT/var
+			mount -o defaults,noatime,nodiratime,compress-force=zlib,subvol=@var,x-mount.mkdir $rootdevice $MOUNT/var
+			#mkdir -p $MOUNT/var/lib
+			mount -o defaults,noatime,nodiratime,compress-force=zlib,subvol=@varlib,x-mount.mkdir $rootdevice $MOUNT/var/lib
+			
+			# create directory for btrfs snapshots
+			mkdir "${MOUNT}_btrfsroot/.snapshots"
+		else
+			mount ${fscreateopt} $rootdevice $MOUNT/
+		fi
 		
 		# create fstab (and crypttab) entry
 		if [[ ${CRYPTROOT_ENABLE^^} ==  YES ]]; then
@@ -443,6 +481,13 @@ prepare_partitions()
 			local rootfs="UUID=$(blkid -s UUID -o value $rootdevice)"
 		fi
 		echo "$rootfs / ${mkfs[$ROOTFS_TYPE]} defaults,noatime,nodiratime${mountopts[$ROOTFS_TYPE]} 0 1" >> $SDCARD/etc/fstab
+		if [[ $ROOTFS_TYPE == btrfs && ${BTRFS_SUBVOLUMES^^} == YES ]]; then
+			# add subvolume mounts
+			echo "$rootdevice /home             btrfs  defaults,noatime,nodiratime,compress-force=zlib,subvol=@home  0 0" >> $SDCARD/etc/fstab
+			echo "$rootdevice /var              btrfs  defaults,noatime,nodiratime,compress-force=zlib,subvol=@var  0 0" >> $SDCARD/etc/fstab
+			echo "$rootdevice /var/lib          btrfs  defaults,noatime,nodiratime,compress-force=zlib,subvol=@varlib  0 0" >> $SDCARD/etc/fstab
+			echo "$rootdevice /run/.btrfsroot/cryptroot  btrfs  defaults,noatime,nodiratime,compress-force=zlib,subvolid=0,x-mount.mkdir  0 1" >> $SDCARD/etc/fstab
+		fi
 	fi
 	if [[ -n $bootpart ]]; then
 		display_alert "Creating /boot" "$bootfs"
@@ -454,6 +499,15 @@ prepare_partitions()
 	fi
 	[[ $ROOTFS_TYPE == nfs ]] && echo "/dev/nfs / nfs defaults 0 0" >> $SDCARD/etc/fstab
 	echo "tmpfs /tmp tmpfs defaults,nosuid 0 0" >> $SDCARD/etc/fstab
+	
+	# kernel self protection config
+	# https://kernsec.org/wiki/index.php/Kernel_Self_Protection_Project/Recommended_Settings
+	# https://tails.boum.org/contribute/design/kernel_hardening/
+	if [[ ${KERNEL_SELF_PROTECTION^^} == YES ]]; then
+		# TODO: slub_debug=P doesn't boot on Odroid HC1
+		# local BOOT_EXTRAARGS="page_poison=1 slub_debug=FZP slab_nomerge pti=on"
+		local BOOT_EXTRAARGS="page_poison=1 slab_nomerge pti=on"
+	fi
 
 	# stage: adjust boot script or boot environment
 	if [[ -f $SDCARD/boot/armbianEnv.txt ]]; then
@@ -475,6 +529,12 @@ prepare_partitions()
 			fi
 		fi
 		echo "rootfstype=$ROOTFS_TYPE" >> $SDCARD/boot/armbianEnv.txt
+		
+		if [[ ${KERNEL_SELF_PROTECTION^^} == YES ]]; then
+			echo "extraargs=$BOOT_EXTRAARGS" >> $SDCARD/boot/armbianEnv.txt
+		fi
+		
+		cat $SDCARD/boot/armbianEnv.txt > $DEST/images/armbianEnv.txt
 	elif [[ $rootpart != 1 ]]; then
 		local bootscript_dst=${BOOTSCRIPT##*:}
 		sed -i 's/mmcblk0p1/mmcblk0p2/' $SDCARD/boot/$bootscript_dst
@@ -495,7 +555,14 @@ prepare_partitions()
 				sed -i 's/^setenv rootdev .*/setenv rootdev "'$rootfs'"/' $SDCARD/boot/boot.ini
 			fi
 		fi
+		
+		if [[ ${KERNEL_SELF_PROTECTION^^} == YES ]]; then
+			sed -i '/# default settings, will be overwritten from armbianEnv.txt/a setenv extraargs "$BOOT_EXTRAARGS"' $SDCARD/boot/boot.ini
+		fi
+		
 		[[ -f $SDCARD/boot/armbianEnv.txt ]] && rm $SDCARD/boot/armbianEnv.txt && display_alert "Deleted" "$SDCARD/boot/armbianEnv.txt" "ext"
+		
+		cat $SDCARD/boot/boot.ini > $DEST/images/boot.ini
 	fi
 
 	# recompile .cmd to .scr if boot.cmd exists
@@ -508,8 +575,9 @@ prepare_partitions()
 		ssh-keygen -t ecdsa -f $SDCARD/etc/dropbear-initramfs/id_ecdsa -N ''
 		
 		# copy dropbear ssh key to image output dir for convenience
-		cp $SDCARD/etc/dropbear-initramfs/id_ecdsa $DEST/images/boot_ssh_id_ecdsa
-		display_alert "SSH private key has been copied to:" "$DEST/images/boot_ssh_id_ecdsa" "info"
+		DROPBEAR_KEY_NAME="boot_ssh_id_ecdsa"
+		cp $SDCARD/etc/dropbear-initramfs/id_ecdsa $DEST/images/$DROPBEAR_KEY_NAME
+		display_alert "SSH private key has been copied to:" "$DEST/images/$DROPBEAR_KEY_NAME" "info"
 
 		# Set the port of the dropbear ssh deamon in the initramfs to a different one if configured
 		# this avoids the typical 'host key changed warning' - `WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!` 
@@ -574,6 +642,12 @@ create_image()
 	# unmount /boot first, rootfs second, image file last
 	sync
 	[[ $BOOTSIZE != 0 ]] && umount -l $MOUNT/boot
+	if [[ ${BTRFS_SUBVOLUMES^^} == YES ]]; then 
+		umount -l $MOUNT/var/lib
+		umount -l $MOUNT/var
+		umount -l $MOUNT/home
+		umount -l ${MOUNT}_btrfsroot
+	fi
 	[[ $ROOTFS_TYPE != nfs ]] && umount -l $MOUNT
 	if [[ ${CRYPTROOT_ENABLE^^} ==  YES ]]; then
 		# close LUKS device
@@ -583,27 +657,32 @@ create_image()
 	rm -rf --one-file-system $DESTIMG $MOUNT
 	mkdir -p $DESTIMG
 	cp $SDCARD/etc/armbian.txt $DESTIMG
-	mv ${SDCARD}.raw $DESTIMG/${version}.img
+	if [[ ${CRYPTROOT_ENABLE^^} == YES ]]; then
+		IMGEXT="img.src"
+	else
+		IMGEXT="img"
+	fi
+	mv ${SDCARD}.raw $DESTIMG/${version}.$IMGEXT
 
 	if [[ $COMPRESS_OUTPUTIMAGE == yes && $BUILD_ALL != yes ]]; then
 		# compress image
 		cd $DESTIMG
-        	sha256sum -b ${version}.img > sha256sum.sha
+        	sha256sum -b ${version}.$IMGEXT > sha256sum.sha
 	        if [[ -n $GPG_PASS ]]; then
         	        echo $GPG_PASS | gpg --passphrase-fd 0 --armor --detach-sign --pinentry-mode loopback --batch --yes ${version}.img
                 	echo $GPG_PASS | gpg --passphrase-fd 0 --armor --detach-sign --pinentry-mode loopback --batch --yes sha256sum.sha
 	        fi
-			display_alert "Compressing" "$DEST/images/${version}.img" "info"
-	        7za a -t7z -bd -m0=lzma2 -mx=3 -mfb=64 -md=32m -ms=on $DEST/images/${version}.7z ${version}.img armbian.txt *.asc sha256sum.sha >/dev/null 2>&1
+			display_alert "Compressing" "$DEST/images/${version}.$IMGEXT" "info"
+			7za a -t7z -m0=lzma2 -mx=9 -ms=on $DEST/images/${version}.7z ${version}.$IMGEXT armbian.txt *.asc sha256sum.sha $DEST/images/$DROPBEAR_KEY_NAME
 	fi
 	#
 	if [[ $BUILD_ALL != yes ]]; then
-		mv $DESTIMG/${version}.img $DEST/images/${version}.img
+		mv $DESTIMG/${version}.$IMGEXT $DEST/images/${version}.$IMGEXT
 		rm -rf $DESTIMG
 	fi
-	display_alert "Done building" "$DEST/images/${version}.img" "info"
+	display_alert "Done building" "$DEST/images/${version}.$IMGEXT" "info"
 
 	# call custom post build hook
-	[[ $(type -t post_build_image) == function ]] && post_build_image "$DEST/images/${version}.img"
+	[[ $(type -t post_build_image) == function ]] && post_build_image "$DEST/images/${version}.$IMGEXT"
 
 } #############################################################################

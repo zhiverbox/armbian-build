@@ -20,7 +20,8 @@ Log=/var/log/armhwinfo.log
 
 do_expand_partition()
 {
-	local rootsource=$(findmnt -n -o SOURCE /) # i.e. /dev/mmcblk0p1 or /dev/mapper/cryptroot
+	# trim any btrfs subvolume identifier given in square brackets (e.g. /dev/mapper/cryptroot[/@])
+	local rootsource=$(findmnt -n -o SOURCE / | sed 's~\[.*\]~~') # i.e. /dev/mmcblk0p1 or /dev/mapper/cryptroot
 	
 	# check for device type
 	local roottype=$(lsblk -n -o TYPE $rootsource) # crypt, part or disk

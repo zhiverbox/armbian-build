@@ -33,13 +33,19 @@ add_profile_sync_settings()
 
 add_user()
 {
-	read -t 0 temp
-	echo -e "\nPlease provide a username (eg. your forename): \c"
-	read -e username
-	RealUserName="$(echo "$username" | tr '[:upper:]' '[:lower:]' | tr -d -c '[:alnum:]')"
-	[ -z "$RealUserName" ] && return
-	echo "Trying to add user $RealUserName"
-	adduser $RealUserName || return
+	#read -t 0 temp
+	#echo -e "\nPlease provide a username (eg. your forename): \c"
+	#read -e username
+	#RealUserName="$(echo "$username" | tr '[:upper:]' '[:lower:]' | tr -d -c '[:alnum:]')"
+	#[ -z "$RealUserName" ] && return
+	#echo "Trying to add user $RealUserName"
+	#adduser $RealUserName || return
+	
+	# zHIVErbox tries to avoid username leaks which weaken privacy by using the
+	# same username as Whonix and Qubes OS
+	RealUserName='user'
+	adduser $RealUserName --gecos "" || return
+	
 	for additionalgroup in sudo netdev audio video dialout plugdev input bluetooth systemd-journal ssh; do
 		usermod -aG ${additionalgroup} ${RealUserName} 2>/dev/null
 	done
