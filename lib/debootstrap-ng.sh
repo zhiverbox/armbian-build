@@ -452,13 +452,25 @@ prepare_partitions()
 	fi
 	[[ $ROOTFS_TYPE == nfs ]] && echo "/dev/nfs / nfs defaults 0 0" >> $SDCARD/etc/fstab
 	echo "tmpfs /tmp tmpfs defaults,nosuid 0 0" >> $SDCARD/etc/fstab
-
+	
+	# kernel self protection config
+	# https://kernsec.org/wiki/index.php/Kernel_Self_Protection_Project/Recommended_Settings
+	# https://tails.boum.org/contribute/design/kernel_hardening/
+	if [[ ${KERNEL_SELF_PROTECTION^^} == YES ]]; then
+		# TODO: slub_debug=P doesn't boot on Odroid HC1
+		# local BOOT_EXTRAARGS="page_poison=1 slub_debug=FZP slab_nomerge pti=on vsyscall=none mce=0 kernel.kptr_restrict=2 vm.mmap_rnd_bits vm.mmap_rnd_compat_bits"
+		local BOOT_EXTRAARGS="page_poison=1 slab_nomerge pti=on vsyscall=none mce=0 kernel.kptr_restrict=2 vm.mmap_rnd_bits vm.mmap_rnd_compat_bits"
+	fi
+	
 	# stage: adjust boot script or boot environment
 	if [[ -f $SDCARD/boot/armbianEnv.txt ]]; then
 		if [[ $CRYPTROOT_ENABLE == yes ]]; then
 			echo "rootdev=$rootdevice cryptdevice=UUID=$(blkid -s UUID -o value ${LOOP}p${rootpart}):$ROOT_MAPPER" >> $SDCARD/boot/armbianEnv.txt
 		else
 			echo "rootdev=$rootfs" >> $SDCARD/boot/armbianEnv.txt
+		fi
+		if [[ ${KERNEL_SELF_PROTECTION^^} == YES ]]; then
+			echo "extraargs=$BOOT_EXTRAARGS" >> $SDCARD/boot/armbianEnv.txt
 		fi
 	elif [[ $rootpart != 1 ]]; then
 		local bootscript_dst=${BOOTSCRIPT##*:}
@@ -476,7 +488,10 @@ prepare_partitions()
 		else
 			sed -i 's/^setenv rootdev .*/setenv rootdev "'$rootfs'"/' $SDCARD/boot/boot.ini
 		fi
-		[[ -f $SDCARD/boot/armbianEnv.txt ]] && rm $SDCARD/boot/armbianEnv.txt
+		if [[ ${KERNEL_SELF_PROTECTION^^} == YES ]]; then
+			sed -i "/# default settings, will be overwritten from armbianEnv.txt/a setenv extraargs \"$BOOT_EXTRAARGS\"" $SDCARD/boot/boot.ini
+		fi
+		[[ -f $SDCARD/boot/armbianEnv.txt ]] && rm $SDCARD/boot/armbianEnv.txt && display_alert "Deleted" "$SDCARD/boot/armbianEnv.txt" "ext"
 	fi
 
 	# recompile .cmd to .scr if boot.cmd exists

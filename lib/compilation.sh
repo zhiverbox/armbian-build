@@ -317,6 +317,122 @@ compile_kernel()
 			cp $SRC/config/kernel/$LINUXCONFIG.config .config
 		fi
 	fi
+	
+	# kernel self protection config
+	# https://kernsec.org/wiki/index.php/Kernel_Self_Protection_Project/Recommended_Settings
+	# https://tails.boum.org/contribute/design/kernel_hardening/
+	if [[ ${KERNEL_SELF_PROTECTION^^} == YES ]]; then
+		# Make sure kernel page tables have safe permissions.
+		sed -i 's/.*CONFIG_DEBUG_KERNEL[ ,=].*/CONFIG_DEBUG_KERNEL=y/' .config
+		sed -i 's/.*CONFIG_DEBUG_RODATA[ ,=].*/CONFIG_DEBUG_RODATA=y/' .config # prior to v4.11
+		sed -i 's/.*CONFIG_STRICT_KERNEL_RWX[ ,=].*/CONFIG_STRICT_KERNEL_RWX=y/' .config # since 4.11
+		
+		# Use -fstack-protector-strong (gcc 4.9+) for best stack canary coverage.
+		sed -i 's/.*CONFIG_CC_STACKPROTECTOR[ ,=].*/CONFIG_CC_STACKPROTECTOR=y/' .config
+		sed -i 's/.*CONFIG_CC_STACKPROTECTOR_STRONG[ ,=].*/CONFIG_CC_STACKPROTECTOR_STRONG=y/' .config
+		
+		# Do not allow direct physical memory access (but if you must have it, at least enable STRICT mode...)
+		#sed -i 's/.*CONFIG_DEVMEM[ ,=].*/# CONFIG_DEVMEM is not set/' .config
+		sed -i 's/.*CONFIG_DEVMEM[ ,=].*/CONFIG_DEVMEM=y/' .config
+		sed -i 's/.*CONFIG_STRICT_DEVMEM[ ,=].*/CONFIG_STRICT_DEVMEM=y/' .config
+		sed -i 's/.*CONFIG_IO_STRICT_DEVMEM[ ,=].*/CONFIG_IO_STRICT_DEVMEM=y/' .config
+		
+		# Provides some protections against SYN flooding.
+		sed -i 's/.*CONFIG_SYN_COOKIES[ ,=].*/CONFIG_SYN_COOKIES=y/' .config
+		
+		# Perform additional validation of various commonly targeted structures.
+		sed -i 's/.*CONFIG_DEBUG_CREDENTIALS[ ,=].*/CONFIG_DEBUG_CREDENTIALS=y/' .config
+		sed -i 's/.*CONFIG_DEBUG_NOTIFIERS[ ,=].*/CONFIG_DEBUG_NOTIFIERS=y/' .config
+		sed -i 's/.*CONFIG_DEBUG_LIST[ ,=].*/CONFIG_DEBUG_LIST=y/' .config
+		sed -i 's/.*CONFIG_DEBUG_SG[ ,=].*/CONFIG_DEBUG_SG=y/' .config
+		sed -i 's/.*CONFIG_BUG_ON_DATA_CORRUPTION[ ,=].*/CONFIG_BUG_ON_DATA_CORRUPTION=y/' .config
+		sed -i 's/.*CONFIG_SCHED_STACK_END_CHECK[ ,=].*/CONFIG_SCHED_STACK_END_CHECK=y/' .config
+		
+		# Provide userspace with seccomp BPF API for syscall attack surface reduction.
+		sed -i 's/.*CONFIG_SECCOMP[ ,=].*/CONFIG_SECCOMP=y/' .config
+		sed -i 's/.*CONFIG_SECCOMP_FILTER[ ,=].*/CONFIG_SECCOMP_FILTER=y/' .config
+
+		# Provide userspace with ptrace ancestry protections.
+		sed -i 's/.*CONFIG_SECURITY[ ,=].*/CONFIG_SECURITY=y/' .config
+		sed -i 's/.*CONFIG_SECURITY_YAMA[ ,=].*/CONFIG_SECURITY_YAMA=y/' .config
+		
+		# Perform usercopy bounds checking. (And disable fallback to gain full whitelist enforcement.)
+		sed -i 's/.*CONFIG_HARDENED_USERCOPY[ ,=].*/CONFIG_HARDENED_USERCOPY=y/' .config
+		sed -i 's/.*CONFIG_HARDENED_USERCOPY_FALLBACK[ ,=].*/# CONFIG_HARDENED_USERCOPY_FALLBACK is not set/' .config
+
+		# Reduce kernel attack surface area by isolating slabs from each other
+		# same as "slab_nomerge" kernel boot parameter, but this way we disable it completely
+		sed -i 's/.*CONFIG_SLAB_MERGE_DEFAULT[ ,=].*/CONFIG_SLAB_MERGE_DEFAULT=n/' .config
+
+		# Randomize allocator freelists, harden metadata.
+		#sed -i 's/.*CONFIG_SLAB_FREELIST_RANDOM[ ,=].*/CONFIG_SLAB_FREELIST_RANDOM=y/' .config
+		#sed -i 's/.*CONFIG_SLAB_FREELIST_HARDENED[ ,=].*/CONFIG_SLAB_FREELIST_HARDENED=y/' .config
+		
+		# Allow allocator validation checking to be enabled (needs "slub_debug=P" kernel boot parameter).
+		#sed -i 's/.*CONFIG_SLUB_DEBUG[ ,=].*/CONFIG_SLUB_DEBUG=y/' .config
+		
+		# Wipe higher-level memory allocations when they are freed (needs "page_poison=1" kernel boot parameter).
+		# (If you can afford even more performance penalty, leave CONFIG_PAGE_POISONING_NO_SANITY=n)
+		sed -i 's/.*CONFIG_PAGE_POISONING[ ,=].*/CONFIG_PAGE_POISONING=y/' .config
+		if grep -q CONFIG_PAGE_POISONING_NO_SANITY .config; then
+			sed -i 's/.*CONFIG_PAGE_POISONING_NO_SANITY[ ,=].*/CONFIG_PAGE_POISONING_NO_SANITY=y/' .config
+		else
+			sed -i '/CONFIG_PAGE_POISONING[ ,=]/a CONFIG_PAGE_POISONING_NO_SANITY=y' .config
+		fi
+		if grep -q CONFIG_PAGE_POISONING_ZERO .config; then
+			sed -i 's/.*CONFIG_PAGE_POISONING_ZERO[ ,=].*/CONFIG_PAGE_POISONING_ZERO=y/' .config
+		else
+			sed -i '/CONFIG_PAGE_POISONING[ ,=]/a CONFIG_PAGE_POISONING_ZERO=y' .config
+		fi
+		
+		# Adds guard pages to kernel stacks (not all architectures support this yet).
+		sed -i 's/.*CONFIG_VMAP_STACK[ ,=].*/CONFIG_VMAP_STACK=y/' .config
+
+		# Perform extensive checks on reference counting.
+		sed -i 's/.*CONFIG_REFCOUNT_FULL[ ,=].*/CONFIG_REFCOUNT_FULL=y/' .config
+
+		# Check for memory copies that might overflow a structure in str*() and mem*() functions both at build-time and run-time.
+		sed -i 's/.*CONFIG_FORTIFY_SOURCE[ ,=].*/CONFIG_FORTIFY_SOURCE=y/' .config
+		
+		# Dangerous; enabling this allows direct physical memory writing.
+		sed -i 's/.*CONFIG_ACPI_CUSTOM_METHOD[ ,=].*/# CONFIG_ACPI_CUSTOM_METHOD is not set/' .config
+
+		# Dangerous; enabling this disables brk ASLR.
+		sed -i 's/.*CONFIG_COMPAT_BRK[ ,=].*/# CONFIG_COMPAT_BRK is not set/' .config
+
+		# Dangerous; enabling this allows direct kernel memory writing.
+		sed -i 's/.*CONFIG_DEVKMEM[ ,=].*/# CONFIG_DEVKMEM is not set/' .config
+
+		# Dangerous; exposes kernel text image layout.
+		sed -i 's/.*CONFIG_PROC_KCORE[ ,=].*/# CONFIG_PROC_KCORE is not set/' .config
+
+		# Dangerous; enabling this disables VDSO ASLR.
+		sed -i 's/.*CONFIG_COMPAT_VDSO[ ,=].*/# CONFIG_COMPAT_VDSO is not set/' .config
+
+		# Dangerous; enabling this allows replacement of running kernel.
+		sed -i 's/.*CONFIG_KEXEC[ ,=].*/# CONFIG_KEXEC is not set/' .config
+
+		# Dangerous; enabling this allows replacement of running kernel.
+		sed -i 's/.*CONFIG_HIBERNATION[ ,=].*/# CONFIG_HIBERNATION is not set/' .config
+
+		# Prior to v4.1, assists heap memory attacks; best to keep interface disabled.
+		sed -i 's/.*CONFIG_INET_DIAG[ ,=].*/# CONFIG_INET_DIAG is not set/' .config
+
+		# Easily confused by misconfigured userspace, keep off.
+		sed -i 's/.*CONFIG_BINFMT_MISC[ ,=].*/# CONFIG_BINFMT_MISC is not set/' .config
+
+		# Use the modern PTY interface (devpts) only.
+		sed -i 's/.*CONFIG_LEGACY_PTYS[ ,=].*/# CONFIG_LEGACY_PTYS is not set/' .config
+
+		# If SELinux can be disabled at runtime, the LSM structures cannot be read-only; keep off.
+		sed -i 's/.*CONFIG_SECURITY_SELINUX_DISABLE[ ,=].*/# CONFIG_SECURITY_SELINUX_DISABLE is not set/' .config
+
+		# Reboot devices immediately if kernel experiences an Oops.
+		sed -i 's/.*CONFIG_PANIC_ON_OOPS[ ,=].*/CONFIG_PANIC_ON_OOPS=y/' .config
+		sed -i 's/.*CONFIG_PANIC_TIMEOUT[ ,=].*/CONFIG_PANIC_TIMEOUT=y/' .config
+		
+		cat .config > $DEST/images/$LINUXCONFIG
+	fi
 
 	# hack for OdroidXU4. Copy firmare files
 	if [[ $BOARD == odroidxu4 ]]; then
