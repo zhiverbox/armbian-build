@@ -24,7 +24,7 @@ CHROOT_CACHE_VERSION=6
 ROOTFS_CACHE_MAX=16 # max number of rootfs cache, older ones will be cleaned up
 
 # TODO: fixed name can't be used for parallel image building
-ROOT_MAPPER="armbian-root"
+ROOT_MAPPER="cryptroot"
 
 [[ -z $ROOTFS_TYPE ]] && ROOTFS_TYPE=ext4 # default rootfs type is ext4
 [[ "ext4 f2fs btrfs nfs fel" != *$ROOTFS_TYPE* ]] && exit_with_error "Unknown rootfs type" "$ROOTFS_TYPE"

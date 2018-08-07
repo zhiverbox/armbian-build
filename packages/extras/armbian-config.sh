@@ -43,6 +43,9 @@ compile_armbian-config()
 	# fallback to replace armbian-config in BSP
 	ln -sf /usr/sbin/armbian-config $tmpdir/usr/bin/armbian-config
 	ln -sf /usr/sbin/softy $tmpdir/usr/bin/softy
+	
+	# fix netcat connection test to use Tor SOCKS5 proxy on zHIVErbox
+    sed -i 's/nc github.com 80/nc -X 5 -x 127.0.0.1:9062 github.com 80/' $tmpdir/usr/sbin/armbian-config
 
 	fakeroot dpkg -b ${tmpdir} >/dev/null
 	mv ${tmpdir}.deb $DEST/debs

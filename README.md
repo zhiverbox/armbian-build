@@ -1,3 +1,37 @@
+# zHIVErbox Armbian Customizations #
+
+The zHIVErbox fork of the Armbian build tools tries to stick as close as possible 
+to the upstream master branch and do customizations via our armbian-userpatches 
+repository. However, a few modifications can't be done via the userpatches:
+
+1. btrfs subvolumes for /, /home, /var and /var/lib
+zHIVErbox makes use of btrfs subvolumes, so we can easily move /var to the hard
+disk of the Odroid HC1/HC2 and disable log2ram, which slightly increases the 
+available (free) memory on the zHIVErbox.
+
+2. kernel self-protection and security hardenings
+zHIVErbox applies many kernel security settings described in: 
+* https://kernsec.org/wiki/index.php/Kernel_Self_Protection_Project/Recommended_Settings
+* https://tails.boum.org/contribute/design/kernel_hardening/
+This can't be done via the armbian-userpatches, so we have to do this here.
+
+3. cache directory for userpatches
+In addition to the `userpatches/overlay` directory, zHIVErbox set's up a
+`userpatches/cache` directory, which is persisted across builds but doesn't contain
+any essential sources. It can be used by apt to speed up subsequent builds, as 
+packages which are installed through userpatches don't have to be downloaded with
+every build when they have been downloaded with a previous build already.
+
+4. use btrfs with `lzo` compression instead of `zlib`
+Vanilla Armbian doesn't allow the configuration of which compression should be
+used with btrfs. zHIVErbox adds this as a configuration option and uses `lzo` 
+by default, which gives slight performance improvements. 
+
+5. minor changes
+4.1. avoid username leaks in `armbian-check-first-login.sh`
+4.2. use netcat with Tor socks `proxy in armbian-config.sh`
+4.3. use torsocks to pull zHIVErbox git updates in `compile.sh`
+
 # Armbian #
 
 Debian based Linux for ARM based single-board computers
