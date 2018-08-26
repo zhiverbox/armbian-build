@@ -639,7 +639,6 @@ create_image()
 		sha256sum -b ${version}.$IMGEXT > sha256sum.sha
 		if [[ -n $GPG_PASS ]]; then
 			echo $GPG_PASS | gpg --passphrase-fd 0 --armor --detach-sign --pinentry-mode loopback --batch --yes ${version}.img
-			echo $GPG_PASS | gpg --passphrase-fd 0 --armor --detach-sign --pinentry-mode loopback --batch --yes sha256sum.sha
 		fi
 			display_alert "Compressing" "$DEST/images/${version}.$IMGEXT" "info"
             7za a -t7z -m0=lzma2 -mx=9 -ms=on $DEST/images/${version}.7z ${version}.$IMGEXT armbian.txt *.asc sha256sum.sha install-zhiverbox.sh $DEST/images/$CRYPTROOT_SSH_UNLOCK_KEY_NAME
@@ -655,7 +654,7 @@ create_image()
 	[[ $(type -t post_build_image) == function ]] && post_build_image "$DEST/images/${version}.$IMGEXT"
 
 	# write image to SD card
-	if [[ -e "$CARD_DEVICE" && -f $DEST/images/${version}.img ]]; then
+	if [[ -e "$CARD_DEVICE" && -f $DEST/images/${version}.img && $COMPRESS_OUTPUTIMAGE != yes ]]; then
 		display_alert "Writing image" "$CARD_DEVICE" "info"
 		etcher $DEST/images/${version}.img -d $CARD_DEVICE -y
 		if [ $? -eq 0 ]; then
