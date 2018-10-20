@@ -18,7 +18,7 @@
 ########################
 SRC="$(dirname "$(realpath "${BASH_SOURCE}")")"
 PROJNAME="zHIVErbox"
-VERSION=0.1.0
+VERSION=0.2.0
 
 # name and location of log file
 INST_LOG=$SRC/install-$PROJNAME.log
@@ -47,6 +47,46 @@ cd $SRC
 #--------------------------------------------------------------------------------------------------------------------------------
 # Script functions
 #--------------------------------------------------------------------------------------------------------------------------------
+
+check_host_os()
+{
+	# Ubuntu Xenial and Bionic are the only fully supported host OS releases
+	local codename=$(lsb_release -sc)
+	display_alert "Installer host OS release" "${codename:-(unknown)}" "info"
+	
+	if [[ -z $codename || "xenial bionic" != *"$codename"* ]]; then
+		display_alert "It seems you are running on an unsupported host system" "${codename:-(unknown)}" "err"
+		echo -e \
+"${BOLD}$PROJNAME installer${NC} has only been tested on 
+  * Ubuntu Xenial (16.04)
+  * Ubuntu Bionic (18.04)
+Please use Virtualbox and setup Ubuntu to run this installer." | sed "s/^/${SED_INTEND}/"
+	
+		trap '' EXIT
+		exit 1
+	else
+		HOSTOS=$codename
+	fi
+}
+
+# host os specific differences this script needs to handle
+host_os_configuration()
+{
+	case $HOSTOS in
+		xenial)
+			ESSENTIAL_PACKAGES="cryptsetup btrfs-tools gpgv2 secure-delete git nmap net -tools"
+			CMD_GET_LOCAL_IP4_ADDR="ip route get 1 | awk '{print \$NF;exit}'";
+			CMD_GPG="gpg2";
+			SYSTEMCTL_NOTFOUND="not-found";
+			;;
+		bionic)
+			ESSENTIAL_PACKAGES="cryptsetup btrfs-tools gpg secure-delete git nmap net-tools";
+			CMD_GET_LOCAL_IP4_ADDR="ip route get 1 | awk '{print \$(NF-2);exit}'";
+			CMD_GPG="gpg";
+			SYSTEMCTL_NOTFOUND="could not be found";
+			;;
+	esac
+}
 
 display_alert()
 #--------------------------------------------------------------------------------------------------------------------------------
@@ -189,7 +229,7 @@ either accept it or try to create your own stuff.
 check_req_apt_packages()
 {
     press_any_key_for_new_screen
-    display_alert "Checking software prerequesites of your system" "cryptsetup, btrfs-tools, gpgv2, secure-delete, git, nmap" ""
+    display_alert "Checking software prerequesites of your system ($HOSTOS)" "$ESSENTIAL_PACKAGES" ""
 echo -e | sed "s/^/${SED_INTEND}/" << EOF
 We might need to install some additional software on your computer.
 
@@ -207,13 +247,11 @@ We just want to make sure it really is there before we continue.
 
 EOF
     press_any_key
-    check_package cryptsetup
-    check_package btrfs-tools
-    check_package gpgv2
-    #check_package cjdns
-    check_package secure-delete
-    check_package git
-    check_package nmap
+    
+    for package in $ESSENTIAL_PACKAGES; 
+    do
+    	check_package $package
+    done
     
 }
 
@@ -451,9 +489,9 @@ EOF
         check_package tor
         check_package torsocks
         display_alert "TOR privacy:" "ENABLED" "info"
-        TORIFY_CMD="torify"
-        GIT_CMD="torify git"
-        PIP_CMD="torify pip3"
+        TORIFY_CMD="torsocks"
+        GIT_CMD="torsocks git"
+        PIP_CMD="torsocks pip3"
     else        
         display_alert "TOR privacy:" "DISABLED" "wrn"
         TORIFY_CMD=""
@@ -581,7 +619,7 @@ Just like the current Ethernet IP address of this computer:
 
 EOF
     press_any_key
-    display_alert "$(get_local_ip4_addr)" "ip route get 1 | awk '{print \$NF;exit}'" "ext"
+    display_alert "$(eval $CMD_GET_LOCAL_IP4_ADDR)" "$CMD_GET_LOCAL_IP4_ADDR" "ext"
     echo ""
     press_any_key
     echo -e | sed "s/^/${SED_INTEND}/" << EOF
@@ -725,7 +763,7 @@ EOF
 
 get_local_ip4_addr()
 {
-    echo $(ip route get 1 | awk '{print $NF;exit}')
+    echo $($CMD_GET_LOCAL_IP4_ADDR)
 }
 
 get_local_cjd_addr()
@@ -741,9 +779,9 @@ get_cjd_addr_from_config()
 check_and_install_cjdns()
 {
     display_alert "Checking for existing Cjdns" "systemctl status cjdns" ""
-    local cjdns_status=$(systemctl status cjdns | head -2 | tail -1)
+    local cjdns_status=$(systemctl status cjdns 2>&1 | head -2 | tail -1)
     echo $cjdns_status | sed "s/^/${SED_INTEND}/"
-    if [[ -n $(echo $cjdns_status | grep "not-found") ]]; then
+    if [[ -n $(echo $cjdns_status | grep "$SYSTEMCTL_NOTFOUND") ]]; then
         CJDNS_INSTALLED="no"
         display_alert "Cjdns is not installed yet" "" "wrn"
     else
@@ -755,7 +793,7 @@ check_and_install_cjdns()
     
     [[ $CJDNS_INSTALLED == "no" ]] && install_cjdns
     
-    display_alert "Your IPv4  address is:" "$(get_local_ip4_addr)" "info"
+    display_alert "Your IPv4  address is:" "$(eval $CMD_GET_LOCAL_IP4_ADDR)" "info"
     display_alert "Your Cjdns address is:" "$(get_local_cjd_addr)" "info"
 echo -e | sed "s/^/${SED_INTEND}/" << EOF
     
@@ -770,17 +808,22 @@ EOF
     press_any_key
     
     TMP_CJDCONF="$(mktemp -p /dev/shm/)"
-    $SRC_HOME/cjdns/cjdroute --genconf >> $TMP_CJDCONF
+    cjdroute --genconf >> $TMP_CJDCONF
     ZHIVERBOX_CJDADDR=$(get_cjd_addr_from_config $TMP_CJDCONF)
     display_alert "$PROJNAME Cjdns address:" "$ZHIVERBOX_CJDADDR" "info"
     echo ""
     press_any_key
-echo -e | sed "s/^/${SED_INTEND}/" << EOF
-Cjdns is near-zero-configuration: There is no pairing needed in your 
+    
+	echo -e \
+"Cjdns is near-zero-configuration: There is no pairing needed in your 
 local network. Your computer and $PROJNAME will find each other 
-automatically when they are in the same network.
+automatically when they are in the same network. 
+${RED}Exception:${NC} This doesn't apply to a 'guest OS' running inside 
+Virtualbox, which will be in a different network than your $PROJNAME.
+Hence, automatic Cjdns peering doesn't work in this case and additional
+configuration is required.
+" | sed "s/^/${SED_INTEND}/"
      
-EOF
     press_any_key
 echo -e | sed "s/^/${SED_INTEND}/" << EOF
 Notice how all Cjdns addresses begin with 'fc'? This means they will
@@ -831,15 +874,15 @@ install_cjdns()
     sudo -H -u $SUDO_USER NO_TEST=1 $TORIFY_CMD ./do >> $INST_LOG 2>&1
     display_alert "$(tail -n1 $INST_LOG)" "" "info"
     echo "(see details: $INST_LOG)" | sed "s/^/${SED_INTEND}/"
-    cp ./cjdroute /usr/bin/cjdroute
+    install -o root -g root -m 0755 ./cjdroute /usr/bin/cjdroute
     display_alert "$(sudo -H -u $SUDO_USER which cjdroute)" "which cjdroute" "ext"
     echo ""
     
     # copy service files
     display_alert "Install Cjdns as system service" "" ""
-    cp ./contrib/systemd/cjdns.service /etc/systemd/system/
+    install -o root -g root -m 0644 ./contrib/systemd/cjdns.service /etc/systemd/system/
     display_alert "Installed:" "/etc/systemd/system/cjdns.service" "info"
-    cp ./contrib/systemd/cjdns-resume.service /etc/systemd/system/
+    install -o root -g root -m 0644 ./contrib/systemd/cjdns-resume.service /etc/systemd/system/
     display_alert "Installed:" "/etc/systemd/system/cjdns-resume.service" "info"
     echo ""
     
@@ -978,13 +1021,14 @@ install_bitmessage()
     press_any_key_for_new_screen
     clone_or_update_from_github "PyBitmessage" "https://github.com/Bitmessage/PyBitmessage"
     
-    display_alert "Checking for additonal system packages to compile bitmessage source code" "python python-msgpack python-qt4 python-pyopencl python-setuptools openssl libssl-dev git" ""
+    display_alert "Checking for additonal system packages to compile bitmessage source code" "python python-msgpack python-qt4 python-pyopencl python-setuptools build-essential openssl libssl-dev git" ""
     # https://bitmessage.org/wiki/Compiling_instructions#Resolve_dependencies
     check_package python    
     check_package python-msgpack 
     check_package python-qt4
     check_package python-pyopencl 
     check_package python-setuptools
+    check_package build-essential
     check_package openssl
     check_package libssl-dev
     check_package git
@@ -1109,11 +1153,11 @@ configuration_summary()
     display_alert "Configuration complete." "All requirements satisfied." "info"
     display_alert "---------------------------------------------------------" "" ""
     display_alert "$PROJNAME name:" "$ZHIVERBOX_NAME" "info"
-    display_alert "GPG fingerprint:" "$(parse_gpg_fingerprint $PROJNAME)" "info"
-    display_alert "GPG KEY ID:" "$GPG_KEY_ID" "info"
-    display_alert "Cjdns address:" "$ZHIVERBOX_CJDADDR" "info"
-    display_alert "Bitmessages receipient:" "$BITMSGID" "info"
-    display_alert "Trezor integration:" "$([[ $USE_TREZOR == "yes" ]] && echo ENABLED || echo DISABLED)" "$([[ $USE_TREZOR == "yes" ]] && echo info || echo wrn)"
+    display_alert "$PROJNAME GPG fingerprint:" "$(parse_gpg_fingerprint $PROJNAME)" "info"
+    display_alert "$PROJNAME GPG KEY ID:" "$GPG_KEY_ID" "info"
+    display_alert "$PROJNAME Cjdns address:" "$ZHIVERBOX_CJDADDR" "info"
+    display_alert "$PROJNAME notifications receipient:" "$BITMSGID" "info"
+    display_alert "$PROJNAME Trezor integration:" "$([[ $USE_TREZOR == "yes" ]] && echo ENABLED || echo DISABLED)" "$([[ $USE_TREZOR == "yes" ]] && echo info || echo wrn)"
     display_alert "Build system summary:" "" ""
     display_alert "* $(uname -o 2> /dev/null)" "$(cat /etc/*-release | grep DISTRIB_DESCRIPTION | sed 's/^DISTRIB_DESCRIPTION=//')" "info"
     display_alert "* sha256sum" "$(sha256sum --version 2> /dev/null | head -n1)" "info"
@@ -1121,8 +1165,8 @@ configuration_summary()
     display_alert "* crpytsetup" "$(cryptsetup --version 2> /dev/null | head -n1)" "info"
     display_alert "* btrfs" "$(btrfs --version 2> /dev/null | head -n1)" "info"
     display_alert "* partprobe" "$(partprobe --version 2> /dev/null | head -n1)" "info"
-    display_alert "* gpg2" "$(gpg2 --version 2> /dev/null | grep GnuPG)" "info"
-    display_alert "* libgcrypt (GnuPG)" "$(gpg2 --version 2> /dev/null | grep libgcrypt)" "info"
+    display_alert "* $CMD_GPG" "$($CMD_GPG --version 2> /dev/null | grep GnuPG)" "info"
+    display_alert "* libgcrypt (GnuPG)" "$($CMD_GPG --version 2> /dev/null | grep libgcrypt)" "info"
     display_alert "* nmap" "$(nmap --version 2> /dev/null | grep version)" "info"
 
     if [[ $USE_TOR == "yes" ]]; then
@@ -1146,8 +1190,8 @@ check_trezor_gpg_init() {
             echo "trezor-agent is installed, but no GPG identity initialized"
 	else
 	    display_alert "Trezor GPG agent seems to be installed and initialized" "$TMP_GNUPGHOME" "info"
-            display_alert "Listing available public keys" "gpg2 --list-keys" ""
-            sudo -u $SUDO_USER $GPGENV gpg2 --list-keys | sed "s/^/${SED_INTEND}/"
+            display_alert "Listing available public keys" "$CMD_GPG --list-keys" ""
+            sudo -u $SUDO_USER $GPGENV $CMD_GPG --list-keys | sed "s/^/${SED_INTEND}/"
             display_alert "Showing configured default key" "$TMP_GNUPGHOME/gpg.conf" ""
             sudo -u $SUDO_USER grep "default" $TMP_GNUPGHOME/gpg.conf | sed "s/^/${SED_INTEND}/"
 	fi
@@ -1205,13 +1249,25 @@ select_source_image()
     else
     	local imagedir=$(pwd)
     fi
-    echo "$imagedir"
-    PS3="> Select number: " 
-    select IMAGE_FILE in $imagedir/*.img.src;
-    do
-	    echo "" && display_alert "Using $PROJNAME source image file" "$IMAGE_FILE" "ext"
-	    break
-    done
+    
+    local imgcount=$(find $imagedir -maxdepth 1 -type f -name "*.img.src" 2>/dev/null | wc -l)
+    if [[ $imgcount > 0 ]]; then
+    	echo "$imagedir"
+        PS3="> Select number: " 
+        select IMAGE_FILE in $imagedir/*.img.src;
+        do
+	        echo "" && display_alert "Using $PROJNAME source image file" "$IMAGE_FILE" "ext"
+	        break
+        done
+    else
+    	display_alert "No source image found in:" "$imagedir" "err"
+    	echo -e \
+"Please copy the source image file (*.img.src) into the same directory as this installer script:
+$imagedir
+"
+		press_any_key
+		select_source_image
+    fi
     
     find_partitions
 }
@@ -1409,9 +1465,9 @@ EOF
     press_any_key
     echo -e | sed "s/^/${SED_INTEND}/" << EOF
 The $PROJNAME source image has LUKS encryption already pre-setup. But 
-since a source image might be downloaded by many people, everybody would 
-share the same encryption key. Flashing this source image as-is on the 
-SD card would be totally pointless from a security perspective!
+since a source image might be downloaded by many people, everybody 
+would share the same encryption key. Flashing this source image as-is 
+on the SD card would be totally pointless from a security perspective!
 
 EOF
     press_any_key
@@ -1560,9 +1616,9 @@ setup_ssh_key_preface()
 	press_any_key_for_new_screen
 	display_alert "Move SSH public key to $ZHIVERBOX_NAME root" "/etc/zhiverbox/id_ssh_user.pub" ""
 	echo -e | sed "s/^/${SED_INTEND}/" << EOF
-$PROJNAME relies on public key authentication for SSH. Regular password logins 
-into your $PROJNAME are disabled. You can either use an existing SSH key or 
-we'll generate a new one now.
+$PROJNAME relies on public key authentication for SSH. Regular password
+logins into your $PROJNAME are disabled. You can either use an existing
+SSH key or we'll generate a new one now.
 
 EOF
 	
@@ -1580,7 +1636,8 @@ create_new_ssh_keypair()
 	sshkeygencmd="sudo -u $SUDO_USER ssh-keygen -t ecdsa -b 384"
 	display_alert "Generating new SSH key pair using kernel entropy..." "$sshkeygencmd" ""
 	echo -e | sed "s/^/${SED_INTEND}/" << EOF
-We'll use ECDSA, because ED25519 is not supported by dropbear/initramfs (yet).
+We'll use ECDSA, because ED25519 is not supported by dropbear/initramfs
+(yet).
 EOF
 	
 	# ssh-keygen asks for the filename, but if the user doesn't enter an absolute
@@ -1598,12 +1655,13 @@ ask_copy_ssh_keypair()
 {
 	display_alert "Copy ssh keys to ~/.ssh/" "" ""
 	echo -e | sed "s/^/${SED_INTEND}/" << EOF
-Please copy your existing SSH key to your ~/.ssh/ folder of this computer. If 
-you are not planning to login from this computer, you only need to copy the 
-public key (.pub extension) now. But if you want to connect to your $PROJNAME 
-using this computer here, you need to copy both - the private key (usually 
-starting with 'id_' and no file extension) and the corresponding public key 
-(usually the same file name as the private key plus the '.pub' extension).
+Please copy your existing SSH key to your ~/.ssh/ folder of this 
+computer. If you are not planning to login from this computer, you only 
+need to copy the public key (.pub extension) now. But if you want to 
+connect to your $PROJNAME using this computer here, you need to copy 
+both - the private key (usually starting with 'id_' and no file 
+extension) and the corresponding public key (usually the same file name 
+as the private key plus the '.pub' extension).
 
 EOF
 	press_any_key
@@ -1668,7 +1726,7 @@ dropbear_preface()
 
 parse_gpg_fingerprint() 
 {
-    local fingerprint=$(gpg2 --fingerprint $1 | sed '2q;d' | sed 's/.*=//')
+    local fingerprint=$($CMD_GPG --fingerprint $1 | sed '2q;d' | sed 's/.*=//')
     echo $fingerprint
 }
 
@@ -1767,7 +1825,7 @@ cat >$TMP_BUILD_DIR/gpgkeyconf << EOF
      %commit
      %echo done
 EOF
-    display_alert "Generating GPG identity for your $PROJNAME" "gpg2 --batch --full-gen-key $TMP_BUILD_DIR/gpgkeyconf" ""
+    display_alert "Generating GPG identity for your $PROJNAME" "$CMD_GPG --batch --full-gen-key $TMP_BUILD_DIR/gpgkeyconf" ""
 echo -e | sed "s/^/${SED_INTEND}/" << EOF
 
 Attention: 
@@ -1779,8 +1837,8 @@ EOF
     display_alert "Entropy before: $(cat /proc/sys/kernel/random/entropy_avail) byte" "cat /proc/sys/kernel/random/entropy_avail" "ext"
     display_alert "GPG key generation" "STARTED" ""
 
-    gpg2 --batch --gen-key $TMP_BUILD_DIR/gpgkeyconf >> $INST_LOG 2>&1
-    gpg2 --list-secret-keys >> $INST_LOG 2>&1
+    $CMD_GPG --batch --gen-key $TMP_BUILD_DIR/gpgkeyconf >> $INST_LOG 2>&1
+    $CMD_GPG --list-secret-keys >> $INST_LOG 2>&1
 
     display_alert "GPG key generation" "FINISHED" "info"
     display_alert "Entropy after: $(cat /proc/sys/kernel/random/entropy_avail) byte" "cat /proc/sys/kernel/random/entropy_avail" "ext"
@@ -1877,23 +1935,23 @@ after_reencrypt_change_fs_labels()
 gpg_export_public_key()
 {
     # export public key to build directory
-    gpg2 --armor --export $PROJNAME > $TMP_BUILD_DIR/$ZHIVERBOX_NAME.asc
+    $CMD_GPG --armor --export $PROJNAME > $TMP_BUILD_DIR/$ZHIVERBOX_NAME.asc
     cp $TMP_BUILD_DIR/$ZHIVERBOX_NAME.asc $TMP_GNUPGHOME
-    display_alert "Export GPG public key" "gpg2 --armor --export $PROJNAME > $ZHIVERBOX_NAME.asc" "ext"
+    display_alert "Export GPG public key" "$CMD_GPG --armor --export $PROJNAME > $ZHIVERBOX_NAME.asc" "ext"
 }
 
 sign_initramfs()
 {
     echo ""
-    display_alert "Creating digital signature of the $ZHIVERBOX_NAME boot partition (initramfs)." "gpg2 --detach-sig ${LOOP_DEST}p1 --output $DEST_IMAGE.boot.sig" ""
-	gpg2 --output $DEST_IMAGE.boot.sig --detach-sig ${LOOP_DEST}p1
+    display_alert "Creating digital signature of the $ZHIVERBOX_NAME boot partition (initramfs)." "$CMD_GPG --detach-sig ${LOOP_DEST}p1 --output $DEST_IMAGE.boot.sig" ""
+	$CMD_GPG --output $DEST_IMAGE.boot.sig --detach-sig ${LOOP_DEST}p1
 }
 
 sign_final_image()
 {
     echo ""
-    display_alert "Creating digital signature of the $ZHIVERBOX_NAME image." "gpg2 --output $DEST_IMAGE.sig --detach-sig $DEST_IMAGE" ""
-	gpg2 --output $DEST_IMAGE.sig --detach-sig $DEST_IMAGE
+    display_alert "Creating digital signature of the $ZHIVERBOX_NAME image." "$CMD_GPG --output $DEST_IMAGE.sig --detach-sig $DEST_IMAGE" ""
+	$CMD_GPG --output $DEST_IMAGE.sig --detach-sig $DEST_IMAGE
 }
 
 add_cjdaddr_to_hosts()
@@ -1951,8 +2009,8 @@ sign_initramfs_using_trezor()
         confirm_disclaimer_noted
 	echo ""
 
-        display_alert "Creating digital signature of the $PROJNAME boot system (initramfs)." "gpg2 --detach-sig ${LOOP_DEST}p1 --output $DEST_IMAGE.boot.sig" ""
-	gpg2 --output $DEST_IMAGE.boot.sig --detach-sig ${LOOP_DEST}p1
+        display_alert "Creating digital signature of the $PROJNAME boot system (initramfs)." "$CMD_GPG --detach-sig ${LOOP_DEST}p1 --output $DEST_IMAGE.boot.sig" ""
+	$CMD_GPG --output $DEST_IMAGE.boot.sig --detach-sig ${LOOP_DEST}p1
 	display_alert "" "" ""
 	
 	
@@ -2053,7 +2111,7 @@ DHCP server (router). They usually have a web interface.
 	press_any_key
 	
 	echo -e \
-"Once you know the right IP address of your $PROJNAME you can connect via:
+"Once you know the IP address of your $PROJNAME you can connect via:
 
 1. ${ORANGE}ssh root@<IP_ADDRESS> -p 2222${NC} (boot system)
 2. ${ORANGE}ssh root@<IP_ADDRESS>        ${NC} (root system)
@@ -2086,6 +2144,9 @@ introduction
 
 # show and request the Bitcoin-Non-Consensus-Fork agreement
 bncf_agreement
+
+# check host os
+check_host_os && host_os_configuration
 
 # check required packages
 check_req_apt_packages
@@ -2185,7 +2246,7 @@ echo ""
 display_alert "Flash this image to a SD card with Etcher now!" "https://etcher.io/" "todo"
 echo ""
 press_any_key
-display_alert "When finished flashing, put the SD card into the Odroid and power it on." "" "todo"
+display_alert "When finished flashing, put the SD card into the Odroid and power it." "" "todo"
 echo -e \
 "Once the boot system is ready, the blue LED will keep double blinking.
 " | sed "s/^/${SED_INTEND}/"
