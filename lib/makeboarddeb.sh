@@ -187,17 +187,6 @@ create_board_package()
 		[ -f /boot/boot.cmd ] && mkimage -C none -A arm -T script -d /boot/boot.cmd /boot/boot.scr  >/dev/null 2>&1
 	fi
 
-	# install bootscripts if they are not present. Fix upgrades from old images
-	if [ ! -f /boot/$bootscript_dst ]; then
-		echo "Recreating boot script"
-		cp /usr/share/armbian/$bootscript_dst /boot  >/dev/null 2>&1
-		rootdev=\$(sed -e 's/^.*root=//' -e 's/ .*$//' < /proc/cmdline)
-		cp /usr/share/armbian/armbianEnv.txt /boot  >/dev/null 2>&1
-		echo "rootdev="\$rootdev >> /boot/armbianEnv.txt
-		sed -i "s/setenv rootdev.*/setenv rootdev \\"\$rootdev\\"/" /boot/boot.ini
-		[ -f /boot/boot.cmd ] && mkimage -C none -A arm -T script -d /boot/boot.cmd /boot/boot.scr  >/dev/null 2>&1
-	fi
-
 	# now cleanup and remove old ramlog service
 	systemctl disable log2ram.service >/dev/null 2>&1
 	[ -f "/usr/sbin/log2ram" ] && rm /usr/sbin/log2ram
