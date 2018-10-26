@@ -362,7 +362,7 @@ prepare_partitions()
 				# Hardcoded overhead +25% is needed for desktop images,
 				# for CLI it could be lower. Align the size up to 4MiB
 				if [[ $BUILD_DESKTOP == yes ]]; then
-					local sdsize=$(bc -l <<< "scale=0; ((($imagesize * 1.25) / 1 + 0) / 4 + 1) * 4")
+					local sdsize=$(bc -l <<< "scale=0; ((($imagesize * 1.30) / 1 + 0) / 4 + 1) * 4")
 				else
 					local sdsize=$(bc -l <<< "scale=0; ((($imagesize * 1.20) / 1 + 0) / 4 + 1) * 4")
 				fi
@@ -416,7 +416,7 @@ prepare_partitions()
 	rm -f $SDCARD/etc/fstab
 	if [[ -n $rootpart ]]; then
 		local rootdevice="${LOOP}p${rootpart}"
-		
+
 		if [[ $CRYPTROOT_ENABLE == yes ]]; then
 			display_alert "Encrypting root partition with LUKS..." "cryptsetup luksFormat $rootdevice" ""
 			echo -n $CRYPTROOT_PASSPHRASE | cryptsetup luksFormat $rootdevice -
@@ -425,7 +425,7 @@ prepare_partitions()
 			# TODO: pass /dev/mapper to Docker
 			rootdevice=/dev/mapper/$ROOT_MAPPER # used by `mkfs` and `mount` commands
 		fi
-		
+
 		check_loop_device "$rootdevice"
 		display_alert "Creating rootfs" "$ROOTFS_TYPE on $rootdevice"
 		mkfs.${mkfs[$ROOTFS_TYPE]} ${mkopts[$ROOTFS_TYPE]} $rootdevice
@@ -507,7 +507,7 @@ prepare_partitions()
 		# local BOOT_EXTRAARGS="page_poison=1 slub_debug=FZP slab_nomerge pti=on vsyscall=none mce=0 kernel.kptr_restrict=2 vm.mmap_rnd_bits vm.mmap_rnd_compat_bits"
 		local BOOT_EXTRAARGS="page_poison=1 slab_nomerge pti=on vsyscall=none mce=0 kernel.kptr_restrict=2 vm.mmap_rnd_bits vm.mmap_rnd_compat_bits"
 	fi
-	
+
 	# stage: adjust boot script or boot environment
 	if [[ -f $SDCARD/boot/armbianEnv.txt ]]; then
 		if [[ $CRYPTROOT_ENABLE == yes ]]; then
@@ -515,6 +515,7 @@ prepare_partitions()
 		else
 			echo "rootdev=$rootfs" >> $SDCARD/boot/armbianEnv.txt
 		fi
+		echo "rootfstype=$ROOTFS_TYPE" >> $SDCARD/boot/armbianEnv.txt
 		if [[ ${KERNEL_SELF_PROTECTION^^} == YES ]]; then
 			echo "extraargs=$BOOT_EXTRAARGS" >> $SDCARD/boot/armbianEnv.txt
 		fi
@@ -549,7 +550,7 @@ prepare_partitions()
 # update_initramfs
 #
 # this should be invoked as late as possible for any modifications by
-# customize_image (userpatches) and prepare_partitions to be reflected in the 
+# customize_image (userpatches) and prepare_partitions to be reflected in the
 # final initramfs
 #
 # especially, this needs to be invoked after /etc/crypttab has been created
@@ -557,15 +558,15 @@ prepare_partitions()
 # https://serverfault.com/questions/907254/cryproot-unlock-with-dropbear-timeout-while-waiting-for-askpass
 #
 update_initramfs() {
-	
+
 	update_initramfs_cmd="update-initramfs -uv -k ${VER}-${LINUXFAMILY}"
 	display_alert "Updating initramfs..." "$update_initramfs_cmd" ""
 	cp /usr/bin/$QEMU_BINARY $SDCARD/usr/bin/
 	mount_chroot "$SDCARD/"
-	
-	chroot $SDCARD /bin/bash -c "$update_initramfs_cmd" >> $DEST/debug/debootstrap.log
-	display_alert "Updated initramfs." "for details see: $DEST/debug/debootstrap.log" "ext"
-	
+
+	chroot $SDCARD /bin/bash -c "$update_initramfs_cmd" >> $DEST/debug/install.log 2>&1
+	display_alert "Updated initramfs." "for details see: $DEST/debug/install.log" "ext"
+
 	umount_chroot "$SDCARD/"
 	rm $SDCARD/usr/bin/$QEMU_BINARY
 
@@ -609,6 +610,9 @@ create_image()
 	# stage: write u-boot
 	write_uboot $LOOP
 
+	# fix wrong / permissions
+	chmod 755 $MOUNT
+
 	# unmount /boot first, rootfs second, image file last
 	sync
 	[[ $BOOTSIZE != 0 ]] && umount -l $MOUNT/boot
@@ -621,7 +625,7 @@ create_image()
 	fi
 	[[ $ROOTFS_TYPE != nfs ]] && umount -l $MOUNT 2>/dev/null
 	[[ $CRYPTROOT_ENABLE == yes ]] && cryptsetup luksClose $ROOT_MAPPER
-	
+
 	losetup -d $LOOP
 	rm -rf --one-file-system $DESTIMG $MOUNT
 	mkdir -p $DESTIMG
@@ -634,14 +638,16 @@ create_image()
 	mv ${SDCARD}.raw $DESTIMG/${version}.$IMGEXT
 
 	if [[ $COMPRESS_OUTPUTIMAGE == yes && $BUILD_ALL != yes ]]; then
+		[[ -f $DEST/images/$CRYPTROOT_SSH_UNLOCK_KEY_NAME ]] && cp $DEST/images/$CRYPTROOT_SSH_UNLOCK_KEY_NAME $DESTIMG/
 		# compress image
 		cd $DESTIMG
 		sha256sum -b ${version}.$IMGEXT > sha256sum.sha
 		if [[ -n $GPG_PASS ]]; then
 			echo $GPG_PASS | gpg --passphrase-fd 0 --armor --detach-sign --pinentry-mode loopback --batch --yes ${version}.img
+			echo $GPG_PASS | gpg --passphrase-fd 0 --armor --detach-sign --pinentry-mode loopback --batch --yes sha256sum.sha
 		fi
 			display_alert "Compressing" "$DEST/images/${version}.$IMGEXT" "info"
-            7za a -t7z -m0=lzma2 -mx=9 -ms=on $DEST/images/${version}.7z ${version}.$IMGEXT armbian.txt *.asc sha256sum.sha install-zhiverbox.sh $DEST/images/$CRYPTROOT_SSH_UNLOCK_KEY_NAME
+            7za a -t7z -m0=lzma2 -mx=9 -ms=on $DEST/images/${version}.7z ${version}.$IMGEXT ${version}.key armbian.txt *.asc sha256sum.sha install-zhiverbox.sh >/dev/null 2>&1
 	fi
 	#
 	if [[ $BUILD_ALL != yes ]]; then
