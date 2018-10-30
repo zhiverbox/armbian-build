@@ -50,20 +50,32 @@ cd $SRC
 
 check_host_os()
 {
+	SUPPORTED_HOST_OS="xenial bionic"
 	# Ubuntu Xenial and Bionic are the only fully supported host OS releases
 	local codename=$(lsb_release -sc)
-	display_alert "Installer host OS release" "${codename:-(unknown)}" "info"
+	display_alert "Detected installer host OS release" "${codename:-(unknown)}" ""
 	
-	if [[ -z $codename || "xenial bionic" != *"$codename"* ]]; then
+	if [[ -z $codename || $SUPPORTED_HOST_OS != *"$codename"* ]]; then
 		display_alert "It seems you are running on an unsupported host system" "${codename:-(unknown)}" "err"
 		echo -e \
 "${BOLD}$PROJNAME installer${NC} has only been tested on 
-  * Ubuntu Xenial (16.04)
-  * Ubuntu Bionic (18.04)
-Please use Virtualbox and setup Ubuntu to run this installer." | sed "s/^/${SED_INTEND}/"
-	
-		trap '' EXIT
-		exit 1
+  * Ubuntu Xenial (16.04 LTS)
+  * Ubuntu Bionic (18.04 LTS)
+  
+Please use Virtualbox and setup a supported OS to run this installer.
+${RED}Press CTRL+C to abort or continue without support.${NC}
+" | sed "s/^/${SED_INTEND}/"
+		press_any_key
+		echo -e \
+"> If you still want to continue on this unsupported system, please 
+select a profile:"
+
+		select HOSTOS in $SUPPORTED_HOST_OS;
+		do
+			echo "" && display_alert "Continuing with profile:" "$HOSTOS" "wrn"
+			display_alert "You will likely encounter errors!" "" "wrn"
+			break
+		done
 	else
 		HOSTOS=$codename
 	fi
