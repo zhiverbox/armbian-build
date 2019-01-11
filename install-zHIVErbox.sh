@@ -86,7 +86,7 @@ host_os_configuration()
 {
 	case $HOSTOS in
 		xenial)
-			ESSENTIAL_PACKAGES="cryptsetup btrfs-tools gpgv2 secure-delete git nmap net -tools"
+			ESSENTIAL_PACKAGES="cryptsetup btrfs-tools gpgv2 secure-delete git nmap net-tools"
 			CMD_GET_LOCAL_IP4_ADDR="ip route get 1 | awk '{print \$NF;exit}'";
 			CMD_GPG="gpg2";
 			SYSTEMCTL_NOTFOUND="not-found";
