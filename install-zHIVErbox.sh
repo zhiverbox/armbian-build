@@ -146,7 +146,7 @@ press_any_key()
 
 new_screen()
 {
-    echo "" && clear
+    echo "" && clear -x
 }
 
 press_any_key_for_new_screen()
@@ -2252,7 +2252,7 @@ press_any_key
 
 # customization complete
 echo ""
-clear
+clear -x
 display_alert "$PROJNAME image customization complete!" "$SRC/$DEST_IMAGE_NAME" "ext"
 echo ""
 display_alert "Flash this image to a SD card with Etcher now!" "https://etcher.io/" "todo"
