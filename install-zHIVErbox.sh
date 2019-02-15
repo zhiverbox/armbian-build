@@ -1647,7 +1647,7 @@ after_reencrypt_move_cjdns_key()
     display_alert "Move Cjdns key to $ZHIVERBOX_NAME root" "" ""
     cp $TMP_CJDCONF $MOUNT_DEST_ROOT/etc/cjdroute.conf
     display_alert "Moved Cjdns key to $ZHIVERBOX_NAME root" "/etc/cjdroute.conf" "ext"
-    ls -la $MOUNT_DEST_ROOT/etc/cjdroute.conf
+    ls -la $MOUNT_DEST_ROOT/etc/cjdroute.conf | sed "s/^/${SED_INTEND}/"
 }
 
 setup_ssh_key_preface()
@@ -1823,7 +1823,7 @@ dropbear_preface()
 
 parse_gpg_fingerprint() 
 {
-    local fingerprint=$($CMD_GPG --fingerprint $1 | sed '2q;d' | sed 's/.*=//')
+    local fingerprint=$($CMD_GPG --fingerprint $1 2>/dev/null | sed '2q;d' | sed 's/.*=//')
     echo $fingerprint
 }
 
