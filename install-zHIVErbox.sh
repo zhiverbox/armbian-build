@@ -26,6 +26,11 @@ INST_LOG=$SRC/install-$PROJNAME.log
 # default LUKS password of the source images (zHIVErbox-x.x.x.img.src)
 SOURCE_LUKS_PASSW="abcd"
 
+# path and name of the SSH public key to use for authentication
+# ATTENTION!!! MUST BE IN SYNC WITH:
+# userpatches/overlay/opt/zhiverbox/scripts/etc/profile.d/z_10_post_user_setup_customization.sh
+SSH_AUTH_KEY=/etc/zhiverbox/ssh_auth_key.pub
+
 # user input prefix
 UINPRFX="         >" # 9 spaces
 # sed intendation
@@ -1609,10 +1614,17 @@ EOF
 
 after_reencrypt_move_gpg_key()
 {
-    display_alert "Move GPG key to $ZHIVERBOX_NAME root" "" ""
-    cp -r $TMP_GNUPGHOME $MOUNT_DEST_ROOT/root/.gnupg
-    display_alert "Moved GPG key to $ZHIVERBOX_NAME root" "/root/.gnupg/" "ext"
-    ls -la $MOUNT_DEST_ROOT/root/.gnupg/
+    display_alert "Import GPG key to $ZHIVERBOX_NAME root" "GNUPGHOME=$TMP_GNUPGHOME $CMD_GPG --export-secret-keys | GNUPGHOME=$MOUNT_DEST_ROOT/root/.gnupg $CMD_GPG --import -" ""
+    GNUPGHOME=$TMP_GNUPGHOME $CMD_GPG --export-secret-keys | GNUPGHOME=$MOUNT_DEST_ROOT/root/.gnupg $CMD_GPG --import >> $INST_LOG 2>&1
+    display_alert "Import GPG ownertrust to $ZHIVERBOX_NAME root" "GNUPGHOME=$TMP_GNUPGHOME $CMD_GPG --export-ownertrust | GNUPGHOME=$MOUNT_DEST_ROOT/root/.gnupg $CMD_GPG --import-ownertrust" ""
+    GNUPGHOME=$TMP_GNUPGHOME $CMD_GPG --export-ownertrust | GNUPGHOME=$MOUNT_DEST_ROOT/root/.gnupg $CMD_GPG --import-ownertrust >> $INST_LOG 2>&1
+
+    display_alert "Imported GPG key to $ZHIVERBOX_NAME root account" "/root/.gnupg" "ext"
+    GNUPGHOME=$MOUNT_DEST_ROOT/root/.gnupg $CMD_GPG --list-secret-keys >> $INST_LOG 2>&1
+
+    # kill the automatically started agent again so we can unmount $MOUNT_DEST_ROOT later
+    GNUPGHOME=$MOUNT_DEST_ROOT/root/.gnupg gpgconf --kill gpg-agent
+    GNUPGHOME=$TMP_GNUPGHOME
 }
 
 after_reencrypt_move_cjdns_key()
@@ -1626,7 +1638,7 @@ after_reencrypt_move_cjdns_key()
 setup_ssh_key_preface()
 {
 	press_any_key_for_new_screen
-	display_alert "Move SSH public key to $ZHIVERBOX_NAME root" "/etc/zhiverbox/id_ssh_user.pub" ""
+	display_alert "Move SSH public key to $ZHIVERBOX_NAME root" "$SSH_AUTH_KEY" ""
 	echo -e | sed "s/^/${SED_INTEND}/" << EOF
 $PROJNAME relies on public key authentication for SSH. Regular password
 logins into your $PROJNAME are disabled. You can either use an existing
@@ -1685,25 +1697,31 @@ select_copy_ssh_public_key()
 	echo -e "\e[0;31mSelect the SSH public key you want to copy to your $PROJNAME\x1B[0m"
 	select SSHPUBKEY in /home/$SUDO_USER/.ssh/*.pub;
     do
-	    echo "" && display_alert "SSH authentication on $PROJNAME root system will done against:" "$SSHPUBKEY" "ext"
-	    mkdir $MOUNT_DEST_ROOT/etc/zhiverbox 2>/dev/null
-	    cp $SSHPUBKEY $MOUNT_DEST_ROOT/etc/zhiverbox/
-	    
-	    # enable public key for root account
-	    mkdir $MOUNT_DEST_ROOT/root/.ssh 2>/dev/null
-	    cat $SSHPUBKEY > $MOUNT_DEST_ROOT/root/.ssh/authorized_keys
-	    
-	    # disable password of root account
-	    #sed -i 's/^root:/root:::0:99999:7:::/' $MOUNT_DEST_ROOT/etc/shadow
-	    
-	    # disable password authentication
-	    display_alert "Disabling SSH password authentication for all accounts..." "$MOUNT_DEST_ROOT/etc/ssh/sshd_config" ""
-	    sed -i 's/^.*PasswordAuthentication\s.*$/PasswordAuthentication no/' $MOUNT_DEST_ROOT/etc/ssh/sshd_config
+        # check if the selected public key is rsa, dsa or ecdsa
+        if ! grep -qE '^([^#]+ )?(ssh-(dss|rsa)|ecdsa-sha2-nistp(256|384|521)) ' "$SSHPUBKEY"; then
+            display_alert "The selected public key's signature algorithm is not supported by dropbear/initramfs." "$SSHPUBKEY" "err"
+            display_alert "Please select a ECDSA-SHA2, RSA or DSA public key!" "" ""
+            # ask the user to select another key
+            select_copy_ssh_public_key
+        else
+	        echo "" && display_alert "SSH authentication on $PROJNAME root system will done against:" "$SSHPUBKEY" "ext"
+	        mkdir ${MOUNT_DEST_ROOT}$(dirname $SSH_AUTH_KEY) 2>/dev/null
+	        cp $SSHPUBKEY ${MOUNT_DEST_ROOT}${SSH_AUTH_KEY}
+
+	        # enable public key for root account
+	        mkdir $MOUNT_DEST_ROOT/root/.ssh 2>/dev/null
+	        cat $SSHPUBKEY > $MOUNT_DEST_ROOT/root/.ssh/authorized_keys
+
+	        # disable password authentication
+	        display_alert "Disabling SSH password authentication for all accounts..." "$MOUNT_DEST_ROOT/etc/ssh/sshd_config" ""
+	        sed -i 's/^.*PasswordAuthentication\s.*$/PasswordAuthentication no/' $MOUNT_DEST_ROOT/etc/ssh/sshd_config
+
+	        display_alert "Later you will be able to login to the $PROJNAME root system via" "ssh root@<$PROJNAME IP ADDRESS>" "ext"
+            echo ""
+            press_any_key
+	    fi
 	    break
     done
-    display_alert "Later you will be able to login to the $PROJNAME root system via" "ssh root@<$PROJNAME IP ADDRESS>" "ext"
-    echo ""
-    press_any_key
 }
 
 extract_default_dropbear_ssh_key()
