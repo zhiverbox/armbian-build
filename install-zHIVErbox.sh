@@ -2005,7 +2005,8 @@ The name is used for easy identification in case you have
 multiple ${PROJNAME}es:
   * filename of your personalized, re-encrypted $PROJNAME image file
   * hostname (shown in login shell)
-  * matches the GPG KEY ID used to sign messages sent to you
+  * uid (name) of the GPG key used to sign the boot system files and messages
+    sent to you
 
 EOF
     read -p "$UINPRFX Do you want to change the name (y/n)? [default: no] " choice
@@ -2016,6 +2017,14 @@ EOF
     echo ""
     [[ ! -z $name ]] && ZHIVERBOX_NAME=$name
     display_alert "Your $PROJNAME will have the following name:" "$ZHIVERBOX_NAME" "info"
+
+    # change gpg uid to $ZHIVERBOX_NAME
+    OWNERTRUST=$($CMD_GPG --export-ownertrust)
+    $CMD_GPG --quick-add-uid $GPG_KEY_ID $ZHIVERBOX_NAME >> $INST_LOG 2>&1
+    $CMD_GPG --quick-set-primary-uid $GPG_KEY_ID $ZHIVERBOX_NAME >> $INST_LOG 2>&1
+    $CMD_GPG --quick-revoke-uid $GPG_KEY_ID $PROJNAME >> $INST_LOG 2>&1
+    echo $OWNERTRUST | $CMD_GPG --import-ownertrust >> $INST_LOG 2>&1
+
     echo ""
     press_any_key
 }
