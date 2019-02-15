@@ -2044,13 +2044,81 @@ gpg_export_public_key()
     $CMD_GPG --armor --export $PROJNAME > $TMP_BUILD_DIR/$ZHIVERBOX_NAME.asc
     cp $TMP_BUILD_DIR/$ZHIVERBOX_NAME.asc $TMP_GNUPGHOME
     display_alert "Export GPG public key" "$CMD_GPG --armor --export $PROJNAME > $ZHIVERBOX_NAME.asc" "ext"
+
+    # import public key to $SUDO_USER's keychain
+    display_alert "Importing $ZHIVERBOX_NAME GPG public key to your local trustdb" "" "ext"
+    cat $TMP_BUILD_DIR/$ZHIVERBOX_NAME.asc | sudo -u $SUDO_USER $CMD_GPG --import >> $INST_LOG 2>&1
+    $CMD_GPG --export-ownertrust | sudo -u $SUDO_USER $CMD_GPG --import-ownertrust >> $INST_LOG 2>&1
 }
 
 sign_initramfs()
 {
     echo ""
-    display_alert "Creating digital signature of the $ZHIVERBOX_NAME boot partition (initramfs)." "$CMD_GPG --detach-sig ${LOOP_DEST}p1 --output $DEST_IMAGE.boot.sig" ""
-	$CMD_GPG --output $DEST_IMAGE.boot.sig --detach-sig ${LOOP_DEST}p1
+    local current_dir=$(pwd)
+    display_alert "Creating digital signature of the $ZHIVERBOX_NAME boot system (initramfs)." "$CMD_GPG --output $MOUNT_DEST_BOOT/SHA256SUMS.asc --clear-sign --armor $TMP_BUILD_DIR/BOOT_SHA256SUMS.txt" ""
+    cd $MOUNT_DEST_BOOT
+    for file in $(find . -type f);
+    do
+        sha256sum $file >> $TMP_BUILD_DIR/BOOT_SHA256SUMS.txt
+    done
+    cd $current_dir
+	$CMD_GPG --output $MOUNT_DEST_BOOT/SHA256SUMS.asc --clear-sign --armor $TMP_BUILD_DIR/BOOT_SHA256SUMS.txt
+	cat $MOUNT_DEST_BOOT/SHA256SUMS.asc >> $INST_LOG 2>&1
+	echo ""
+	display_alert "Created signature file of $ZHIVERBOX_NAME boot system (initramfs)." "SHA256SUMS.asc" "ext"
+	echo ""
+
+	# can be verified with:
+	#   gpg --verify SHA256SUMS.asc
+	#   sha256sum -c SHA256SUMS.asc
+	# or in a one-liner:
+	#   gpg -d SHA256SUMS.asc | sha256sum --quiet -c
+
+	display_alert "How can I verify the integrity of the $ZHIVERBOX_NAME boot system (initramfs)?"
+	echo ""
+	press_any_key
+	echo -e \
+"You can verify the integrity of your $ZHIVERBOX_NAME boot system ${GREEN}any time${NC}:
+0. Shutdown the $PROJNAME if it is running.
+1. Remove the SD card from the Odroid and mount it on a trusted
+   computer.
+2. The boot partition should be mounted automatically when you insert
+   the SD card - if not, mount it manually.
+3. Open a terminal (shell) in the folder the boot partition is mounted
+   to.
+4. Execute the following command:
+
+   ${ORANGE}$CMD_GPG -d SHA256SUMS.asc | sha256sum --quiet -c${NC}
+
+   This verifies that the ${MAGENTA}SHA256SUMS.asc${NC} file was signed
+   with the private GPG key of your $PROJNAME!
+
+   The second part of the command verifies that the unencrypted files
+   of the boot partition have not been tampered with. If everything is
+   good no files are reported.
+   ${RED}However, if any files are reported as FAILED you should be highly
+   concerned and consider your $PROJNAME compromized! Do not boot from
+   that SD card anymore in this case!${NC}
+
+   ${MAGENTA}Note: If you verify using a different computer than this one here,
+   you have to import the $PROJNAME's public GPG key on that computer
+   first:${NC} ${ORANGE}$CMD_GPG --import $ZHIVERBOX_NAME.asc${NC}
+
+Let's run that verify command once now, so you can see how the output
+should look like!
+" | sed "s/^/${SED_INTEND}/"
+    press_any_key
+
+    display_alert "Verify $ZHIVERBOX_NAME boot system (initramfs)" "$CMD_GPG -d SHA256SUMS.asc | sha256sum --quiet -c"
+    echo ""
+    echo -e "$ cd $MOUNT_DEST_BOOT"
+    cd $MOUNT_DEST_BOOT
+    echo -e "$ $CMD_GPG -d SHA256SUMS.asc | sha256sum --quiet -c"
+    sudo -u $SUDO_USER $CMD_GPG -d SHA256SUMS.asc | sha256sum --quiet -c 2>&1
+
+    echo ""
+    press_any_key
+    cd $current_dir
 }
 
 sign_final_image()
