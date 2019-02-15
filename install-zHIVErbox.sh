@@ -1712,6 +1712,11 @@ select_copy_ssh_public_key()
 	        mkdir $MOUNT_DEST_ROOT/root/.ssh 2>/dev/null
 	        cat $SSHPUBKEY > $MOUNT_DEST_ROOT/root/.ssh/authorized_keys
 
+	        # expand validity of root password,
+	        # so users don't have to change it on first login
+	        display_alert "Set root password age to today" "chage -R $MOUNT_DEST_ROOT -d $(date -I) root" ""
+	        chage -R $MOUNT_DEST_ROOT -d $(date -I) root
+
 	        # disable password authentication
 	        display_alert "Disabling SSH password authentication for all accounts..." "$MOUNT_DEST_ROOT/etc/ssh/sshd_config" ""
 	        sed -i 's/^.*PasswordAuthentication\s.*$/PasswordAuthentication no/' $MOUNT_DEST_ROOT/etc/ssh/sshd_config
