@@ -91,13 +91,13 @@ host_os_configuration()
 {
 	case $HOSTOS in
 		xenial)
-			ESSENTIAL_PACKAGES="cryptsetup btrfs-tools gpgv2 secure-delete git nmap net-tools"
+			ESSENTIAL_PACKAGES="cryptsetup btrfs-tools gpgv2 secure-delete git u-boot-tools cpio nmap net-tools"
 			CMD_GET_LOCAL_IP4_ADDR="ip route get 1 | awk '{print \$NF;exit}'";
 			CMD_GPG="gpg2";
 			SYSTEMCTL_NOTFOUND="not-found";
 			;;
 		bionic)
-			ESSENTIAL_PACKAGES="cryptsetup btrfs-tools gpg secure-delete git nmap net-tools";
+			ESSENTIAL_PACKAGES="cryptsetup btrfs-tools gpg secure-delete git u-boot-tools cpio nmap net-tools";
 			CMD_GET_LOCAL_IP4_ADDR="ip route get 1 | awk '{print \$(NF-2);exit}'";
 			CMD_GPG="gpg";
 			SYSTEMCTL_NOTFOUND="could not be found";
@@ -376,6 +376,7 @@ EOF
 
 umount_images()
 {
+    umount $MOUNT_DEST_BOOT > /dev/null 2>&1
     umount $MOUNT_DEST_ROOT > /dev/null 2>&1
     cryptsetup luksClose $DEST_ROOT_MAPPER > /dev/null 2>&1
     umount $MOUNT_SRC_ROOT > /dev/null 2>&1
@@ -1349,6 +1350,10 @@ copy_unlock_images()
 	MOUNT_DEST_ROOT="$TMP_BUILD_DIR/mnt/dest-${ZHIVERBOX_NAME}/_root"
 	mkdir -p $MOUNT_DEST_ROOT
 	
+	# create mountpoint for destination boot image
+	MOUNT_DEST_BOOT="$TMP_BUILD_DIR/mnt/dest-${ZHIVERBOX_NAME}/_boot"
+	mkdir -p $MOUNT_DEST_BOOT
+
 	echo ""
 }
 
@@ -1595,6 +1600,16 @@ after_reencrypt_mount_dest_root()
     press_any_key
 }
 
+after_reencrypt_mount_dest_boot()
+{
+    display_alert "Mounting boot partition" "mount ${LOOP_DEST}p${BOOTPART} $MOUNT_DEST_BOOT" ""
+    mount ${LOOP_DEST}p${BOOTPART} $MOUNT_DEST_BOOT
+    echo ""
+    echo "$ ls _boot"
+    ls $MOUNT_DEST_BOOT
+    echo ""
+}
+
 after_reencrypt_move_keys()
 {
     press_any_key_for_new_screen
@@ -1729,6 +1744,7 @@ select_copy_ssh_public_key()
     done
 }
 
+# DEPRECATED
 extract_default_dropbear_ssh_key()
 {
 	# extract the SSH key needed to login to the boot system (initial ram disk with dropbear)
@@ -1745,6 +1761,52 @@ extract_default_dropbear_ssh_key()
 	press_any_key
 	display_alert "You should learn/write down this command!"
 	echo ""
+	press_any_key
+}
+
+replace_default_dropbear_ssh_key()
+{
+    local dropbeardir=$MOUNT_DEST_ROOT/etc/dropbear-initramfs
+    display_alert "Remove default dropbear public and private key" "rm $dropbeardir/id_*"
+    rm $dropbeardir/id_*
+    display_alert "Copy selected public key to dropbear config" "cp $SSHPUBKEY $dropbeardir"
+    cp $SSHPUBKEY $dropbeardir
+    echo ""
+
+    display_alert "Replacing SSH key in $PROJNAME boot system (initramfs)" "" ""
+    after_reencrypt_mount_dest_boot
+    INITRD_IMAGE=$(stat -c %n $MOUNT_DEST_BOOT/initrd.img-* 2>/dev/null)
+    INITRD_IMAGE_NAME=$(basename $INITRD_IMAGE)
+    UINITRD_IMAGE=$(stat -c %n $MOUNT_DEST_BOOT/uInitrd-* 2>/dev/null)
+    UINITRD_IMAGE_NAME=$(basename $UINITRD_IMAGE)
+
+    TMP_INITRAMFS=$(mktemp -d -p /dev/shm/)
+    display_alert "Unzipping the $PROJNAME boot system (initramfs)" "cat $INITRD_IMAGE | gunzip | cpio -i" ""
+    local current_dir=$(pwd)
+    cd $TMP_INITRAMFS
+    cat $INITRD_IMAGE | gunzip | cpio -i 2>>$INST_LOG
+    echo "" >> $INST_LOG 2>&1
+    echo "$ ls $TMP_INITRAMFS" >> $INST_LOG 2>&1
+    ls $TMP_INITRAMFS >> $INST_LOG 2>&1
+    echo ""
+
+    local auth_keys_file=$(stat -c %n $TMP_INITRAMFS/root-*/.ssh/authorized_keys 2>/dev/null)
+    display_alert "Replacing SSH public key in boot system (initramfs)" "cat $SSHPUBKEY > $auth_keys_file" ""
+    cat $SSHPUBKEY > $auth_keys_file
+    echo ""
+
+    display_alert "Repackaging boot system (initramfs)" "find . | cpio -H newc -o | gzip > $INITRD_IMAGE" ""
+    find . | cpio -H newc -o | gzip > $INITRD_IMAGE 2>>$INST_LOG
+    chmod +r $INITRD_IMAGE
+    echo ""
+    display_alert "Recreating boot system uBoot image file (initramfs)" "mkimage -A arm -O linux -T ramdisk -C gzip -d $INITRD_IMAGE_NAME $UINITRD_IMAGE_NAME" ""
+    cd $MOUNT_DEST_BOOT
+    mkimage -A arm -O linux -T ramdisk -C gzip -d $INITRD_IMAGE_NAME $UINITRD_IMAGE_NAME 2>>$INST_LOG
+
+    cd $current_dir
+    echo ""
+        display_alert "$PROJNAME's boot system now authenticates against the same SSH public key as the root system." "" "ext"
+    echo ""
 	press_any_key
 }
 
@@ -2235,8 +2297,8 @@ after_reencrypt_change_fs_labels
 after_reencrypt_move_keys
 setup_ssh_key_preface
 
-# extract SSH key for initramfs
-extract_default_dropbear_ssh_key
+# replace default SSH key in initramfs
+replace_default_dropbear_ssh_key
 
 # set hostname
 after_reencrypt_set_hostname
