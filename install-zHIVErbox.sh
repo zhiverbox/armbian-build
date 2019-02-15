@@ -18,7 +18,7 @@
 ########################
 SRC="$(dirname "$(realpath "${BASH_SOURCE}")")"
 PROJNAME="zHIVErbox"
-VERSION=0.2.0
+VERSION=0.3.0
 
 # name and location of log file
 INST_LOG=$SRC/install-$PROJNAME.log
