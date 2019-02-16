@@ -2018,12 +2018,14 @@ EOF
     [[ ! -z $name ]] && ZHIVERBOX_NAME=$name
     display_alert "Your $PROJNAME will have the following name:" "$ZHIVERBOX_NAME" "info"
 
-    # change gpg uid to $ZHIVERBOX_NAME
-    OWNERTRUST=$($CMD_GPG --export-ownertrust)
-    $CMD_GPG --quick-add-uid $GPG_KEY_ID $ZHIVERBOX_NAME >> $INST_LOG 2>&1
-    $CMD_GPG --quick-set-primary-uid $GPG_KEY_ID $ZHIVERBOX_NAME >> $INST_LOG 2>&1
-    $CMD_GPG --quick-revoke-uid $GPG_KEY_ID $PROJNAME >> $INST_LOG 2>&1
-    echo $OWNERTRUST | $CMD_GPG --import-ownertrust >> $INST_LOG 2>&1
+    # change gpg uid to $ZHIVERBOX_NAME (gpg version 2.1.18 required)
+    if [[ $HOSTOS = 'bionic' ]]; then
+        OWNERTRUST=$($CMD_GPG --export-ownertrust)
+        $CMD_GPG --quick-add-uid $GPG_KEY_ID $ZHIVERBOX_NAME >> $INST_LOG 2>&1
+        $CMD_GPG --quick-set-primary-uid $GPG_KEY_ID $ZHIVERBOX_NAME >> $INST_LOG 2>&1
+        $CMD_GPG --quick-revoke-uid $GPG_KEY_ID $PROJNAME >> $INST_LOG 2>&1
+        echo $OWNERTRUST | $CMD_GPG --import-ownertrust >> $INST_LOG 2>&1
+    fi
 
     echo ""
     press_any_key
@@ -2055,17 +2057,27 @@ sign_initramfs()
 {
     echo ""
     local current_dir=$(pwd)
-    display_alert "Creating digital signature of the $ZHIVERBOX_NAME boot system (initramfs)." "$CMD_GPG --output $MOUNT_DEST_BOOT/SHA256SUMS.asc --clear-sign --armor $TMP_BUILD_DIR/BOOT_SHA256SUMS.txt" ""
+    local TMP_SHASUMS_FILENAME=BOOT_SHA256SUMS.txt
+    local TMP_SHASUMS_FILE=$TMP_BUILD_DIR/$TMP_SHASUMS_FILENAME
+    # ATTENTION: path must be the same as in /etc/initramfs/post-update.d/999-boot-signature
+    local SIGNED_SHASUMS_FILENAME=SHA256SUMS.asc
+    local SIGNED_SHASUMS_FILE=$MOUNT_DEST_BOOT/$SIGNED_SHASUMS_FILENAME
+
+    rm $TMP_SHASUMS_FILE 2>/dev/null
+
+    # create hashes of all files except the $SIGNED_SHASUMS_FILENAME
+    display_alert "Creating digital signature of the $ZHIVERBOX_NAME boot system (initramfs)." "$CMD_GPG --output $SIGNED_SHASUMS_FILE --yes --clearsign --armor $TMP_SHASUMS_FILE" ""
     cd $MOUNT_DEST_BOOT
-    for file in $(find . -type f);
+    for file in $(find . -type f \( ! -name "$SIGNED_SHASUMS_FILENAME" \));
     do
-        sha256sum $file >> $TMP_BUILD_DIR/BOOT_SHA256SUMS.txt
+        sha256sum $file >> $TMP_SHASUMS_FILE
     done
     cd $current_dir
-    $CMD_GPG --output $MOUNT_DEST_BOOT/SHA256SUMS.asc --clear-sign --armor $TMP_BUILD_DIR/BOOT_SHA256SUMS.txt
-    cat $MOUNT_DEST_BOOT/SHA256SUMS.asc >> $INST_LOG 2>&1
+
+    $CMD_GPG --output $SIGNED_SHASUMS_FILE --yes --clearsign --armor $TMP_SHASUMS_FILE
+    cat $SIGNED_SHASUMS_FILE >> $INST_LOG 2>&1
     echo ""
-    display_alert "Created signature file of $ZHIVERBOX_NAME boot system (initramfs)." "SHA256SUMS.asc" "ext"
+    display_alert "Created signature file of $ZHIVERBOX_NAME boot system (initramfs)." "$SIGNED_SHASUMS_FILENAME" "ext"
     echo ""
 
     # can be verified with:
@@ -2088,9 +2100,9 @@ sign_initramfs()
    to.
 4. Execute the following command:
 
-   ${ORANGE}$CMD_GPG -d SHA256SUMS.asc | sha256sum --quiet -c${NC}
+   ${ORANGE}$CMD_GPG -d $SIGNED_SHASUMS_FILENAME | sha256sum --quiet -c${NC}
 
-   This verifies that the ${MAGENTA}SHA256SUMS.asc${NC} file was signed
+   This verifies that the ${MAGENTA}${SIGNED_SHASUMS_FILENAME}${NC} file was signed
    with the private GPG key of your $PROJNAME!
 
    The second part of the command verifies that the unencrypted files
@@ -2109,12 +2121,12 @@ should look like!
 " | sed "s/^/${SED_INTEND}/"
     press_any_key
 
-    display_alert "Verify $ZHIVERBOX_NAME boot system (initramfs)" "$CMD_GPG -d SHA256SUMS.asc | sha256sum --quiet -c"
+    display_alert "Verify $ZHIVERBOX_NAME boot system (initramfs)" "$CMD_GPG -d $SIGNED_SHASUMS_FILENAME | sha256sum --quiet -c"
     echo ""
     echo -e "$ cd $MOUNT_DEST_BOOT"
     cd $MOUNT_DEST_BOOT
-    echo -e "$ $CMD_GPG -d SHA256SUMS.asc | sha256sum --quiet -c"
-    sudo -u $SUDO_USER $CMD_GPG -d SHA256SUMS.asc | sha256sum --quiet -c 2>&1
+    echo -e "$ $CMD_GPG -d $SIGNED_SHASUMS_FILENAME | sha256sum --quiet -c"
+    sudo -u $SUDO_USER $CMD_GPG -d $SIGNED_SHASUMS_FILENAME | sha256sum --quiet -c 2>&1
 
     echo ""
     press_any_key
@@ -2124,8 +2136,8 @@ should look like!
 sign_final_image()
 {
     echo ""
-    display_alert "Creating digital signature of the $ZHIVERBOX_NAME image." "$CMD_GPG --output $DEST_IMAGE.sig --detach-sig $DEST_IMAGE" ""
-    $CMD_GPG --output $DEST_IMAGE.sig --detach-sig $DEST_IMAGE
+    display_alert "Creating digital signature of the $ZHIVERBOX_NAME image." "$CMD_GPG --output $DEST_IMAGE.sig --yes --detach-sig $DEST_IMAGE" ""
+    $CMD_GPG --output $DEST_IMAGE.sig --yes --detach-sig $DEST_IMAGE
 }
 
 add_cjdaddr_to_hosts()
