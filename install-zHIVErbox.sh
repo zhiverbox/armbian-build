@@ -1769,8 +1769,8 @@ replace_default_dropbear_ssh_key()
     local dropbeardir=$MOUNT_DEST_ROOT/etc/dropbear-initramfs
     display_alert "Remove default dropbear public and private key" "rm $dropbeardir/id_*"
     rm $dropbeardir/id_*
-    display_alert "Copy selected public key to dropbear config" "cp $SSHPUBKEY $dropbeardir"
-    cp $SSHPUBKEY $dropbeardir
+    display_alert "Add selected public key to dropbear authorized_keys" "cat $SSHPUBKEY > $dropbeardir/authorized_keys"
+    cat $SSHPUBKEY > $dropbeardir/authorized_keys
     echo ""
 
     display_alert "Replacing SSH key in $PROJNAME boot system (initramfs)" "" ""
