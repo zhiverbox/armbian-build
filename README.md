@@ -1,8 +1,8 @@
 # zHIVErbox Armbian Customizations #
 
 The zHIVErbox fork of the Armbian build tools tries to stick as close as possible 
-to the upstream master branch and do customizations via our armbian-userpatches 
-repository. However, a few modifications can't be done via the userpatches:
+to the upstream master branch and do customizations via our [armbian-userpatches 
+repository](https://github.com/zhiverbox/armbian-userpatches). However, a few modifications can't be done via the userpatches:
 
 1. btrfs subvolumes for /, /home, /var and /var/lib
 zHIVErbox makes use of btrfs subvolumes, so we can easily move /var to the hard
@@ -43,23 +43,16 @@ Debian based Linux for ARM based single-board computers
 
 Supported build environment is **Ubuntu Bionic 18.04 x64** ([minimal iso image](http://archive.ubuntu.com/ubuntu/dists/bionic/main/installer-amd64/current/images/netboot/mini.iso)).
 
-- guest inside a [VirtualBox](https://www.virtualbox.org/wiki/Downloads) or other virtualization software,
-- guest managed by [Vagrant](https://docs.armbian.com/Developer-Guide_Using-Vagrant/). This uses Virtualbox (as above) but does so in an easily repeatable way,
-- inside a [Docker](https://docs.armbian.com/Developer-Guide_Building-with-Docker/), [systemd-nspawn](https://www.freedesktop.org/software/systemd/man/systemd-nspawn.html) or other container environment [(example)](https://github.com/armbian/build/pull/255#issuecomment-205045273),
-- running natively on a dedicated PC or a server (**not** recommended),
-- **25GB disk space** or more and **2GB RAM** or more available for the VM, container or native OS,
+- ~~guest inside a [VirtualBox](https://www.virtualbox.org/wiki/Downloads) or other virtualization software,~~
+- ~~guest managed by [Vagrant](https://docs.armbian.com/Developer-Guide_Using-Vagrant/). This uses Virtualbox (as above) but does so in an easily repeatable way,~~
+- ~~inside a [Docker](https://docs.armbian.com/Developer-Guide_Building-with-Docker/), [systemd-nspawn](https://www.freedesktop.org/software/systemd/man/systemd-nspawn.html) or other container environment [(example)](https://github.com/armbian/build/pull/255#issuecomment-205045273),~~
+- running natively on a dedicated PC or a server (**due to rootfs encryption, this is the only supported method right now**),
+- **25GB disk space** or more and **2GB RAM** or more available for ~~the VM, container or~~ native OS,
 - superuser rights (configured `sudo` or root access).
 
 **Execution**
 
-	apt-get -y install git
-	git clone https://github.com/armbian/build
-	cd build
-	./compile.sh
-
-Make sure that full path to the build script does not contain spaces.
-
-You will be prompted with a selection menu for a build option, a board name, a kernel branch and an OS release. Please check the documentation for [advanced options](https://docs.armbian.com/Developer-Guide_Build-Options/) and [additional customization](https://docs.armbian.com/Developer-Guide_User-Configurations/).
+See the [build instructions in the zhiverbox/armbian-userpatches repository](https://github.com/zhiverbox/armbian-userpatches/blob/master/BUILD.md).
 
 Build process uses caching for the compilation and the debootstrap process, so consecutive runs with similar settings will be much faster.
 
@@ -80,5 +73,3 @@ If you are struggling, check [this detailed step by step guide on contributing](
 ## Where to get more info?
 
 - [Documentation](https://docs.armbian.com/Developer-Guide_Build-Preparation/ "Developer resources")
-- [Prebuilt images](https://www.armbian.com/download/ "Download section")
-- [Support forums](https://forum.armbian.com/ "Armbian support forum")
