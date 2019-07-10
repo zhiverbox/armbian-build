@@ -16,7 +16,7 @@ ubuntu-*-cloudimg-console.log
 /.tmp/
 /output/
 /cache/
-/userpatches/
+/*userpatches*/
 
 ### General annoyances ###
 .DS_Store
