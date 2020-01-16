@@ -26,22 +26,24 @@ create_chroot()
 	declare -A qemu_binary apt_mirror components
 	qemu_binary['armhf']='qemu-arm-static'
 	qemu_binary['arm64']='qemu-aarch64-static'
-	apt_mirror['jessie']="$DEBIAN_MIRROR"
 	apt_mirror['stretch']="$DEBIAN_MIRROR"
 	apt_mirror['buster']="$DEBIAN_MIRROR"
+	apt_mirror['bullseye']="$DEBIAN_MIRROR"
 	apt_mirror['xenial']="$UBUNTU_MIRROR"
 	apt_mirror['bionic']="$UBUNTU_MIRROR"
-	apt_mirror['disco']="$UBUNTU_MIRROR"
-	components['jessie']='main,contrib'
+	apt_mirror['focal']="$UBUNTU_MIRROR"
+	apt_mirror['eoan']="$UBUNTU_MIRROR"
 	components['stretch']='main,contrib'
 	components['buster']='main,contrib'
+	components['bullseye']='main,contrib'
 	components['xenial']='main,universe,multiverse'
 	components['bionic']='main,universe,multiverse'
-	components['disco']='main,universe,multiverse'
+	components['focal']='main,universe,multiverse'
+	components['eoan']='main,universe,multiverse'
 	display_alert "Creating build chroot" "$release/$arch" "info"
 	local includes="ccache,locales,git,ca-certificates,devscripts,libfile-fcntllock-perl,debhelper,rsync,python3,distcc"
 	# perhaps a temporally workaround
-	[[ $release == buster || $release == disco ]] && includes=$includes",perl-openssl-defaults,libnet-ssleay-perl"
+	[[ $release == buster || $release == bullseye || $release == focal || $release == eoan ]] && includes=$includes",perl-openssl-defaults,libnet-ssleay-perl"
 	if [[ $NO_APT_CACHER != yes ]]; then
 		local mirror_addr="http://localhost:3142/${apt_mirror[$release]}"
 	else
@@ -89,12 +91,13 @@ chroot_prepare_distccd()
 	local arch=$2
 	local dest=/tmp/distcc/${release}-${arch}
 	declare -A gcc_version gcc_type
-	gcc_version['jessie']='4.9'
 	gcc_version['stretch']='6.3'
 	gcc_version['buster']='8.3'
+	gcc_version['bullseye']='9.2'
 	gcc_version['xenial']='5.4'
 	gcc_version['bionic']='5.4'
-	gcc_version['disco']='8.3'
+	gcc_version['focal']='9.2'
+	gcc_version['eoan']='9.2'
 	gcc_type['armhf']='arm-linux-gnueabihf-'
 	gcc_type['arm64']='aarch64-linux-gnu-'
 	rm -f $dest/cmdlist
@@ -127,7 +130,7 @@ chroot_build_packages()
 		target_arch="$ARCH"
 	else
 		# only make packages for recent releases. There are no changes on older
-		target_release="stretch bionic buster disco"
+		target_release="stretch bionic buster bullseye eoan focal"
 		target_arch="armhf arm64"
 	fi
 
@@ -168,7 +171,7 @@ chroot_build_packages()
 					continue
 				fi
 
-				local plugin_target_dir=$DEST/debs/extra/$package_component/
+				local plugin_target_dir=${DEB_STORAGE}/extra/$package_component/
 				mkdir -p $plugin_target_dir
 
 				# check if needs building
@@ -292,8 +295,8 @@ chroot_installpackages_local()
 	mkdir -p /tmp/aptly-temp/
 	aptly -config=$conf repo create temp
 	# NOTE: this works recursively
-	aptly -config=$conf repo add temp $DEST/debs/extra/${RELEASE}-desktop/
-	aptly -config=$conf repo add temp $DEST/debs/extra/${RELEASE}-utils/
+	aptly -config=$conf repo add temp ${DEB_STORAGE}/extra/${RELEASE}-desktop/
+	aptly -config=$conf repo add temp ${DEB_STORAGE}/extra/${RELEASE}-utils/
 	# -gpg-key="925644A6"
 	aptly -keyring="$SRC/packages/extras-buildpkgs/buildpkg-public.gpg" -secret-keyring="$SRC/packages/extras-buildpkgs/buildpkg.gpg" -batch=true -config=$conf \
 		 -gpg-key="925644A6" -passphrase="testkey1234" -component=temp -distribution=$RELEASE publish repo temp

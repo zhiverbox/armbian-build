@@ -52,9 +52,6 @@ debootstrap_ng()
 	install_distribution_specific
 	install_common
 
-	# install additional applications
-	[[ $EXTERNAL == yes ]] && install_external_applications
-
 	# install locally built packages
 	[[ $EXTERNAL_NEW == compile ]] && chroot_installpackages_local
 
@@ -66,7 +63,7 @@ debootstrap_ng()
 	customize_image
 
 	# create list of installed packages for debug purposes
-	chroot $SDCARD /bin/bash -c "dpkg --get-selections" | grep -v deinstall | awk '{print $1}' | cut -f1 -d':' >> $DEST/debug/installed-packages-${RELEASE}.list 2>&1
+	chroot $SDCARD /bin/bash -c "dpkg --get-selections" | grep -v deinstall | awk '{print $1}' | cut -f1 -d':' > $DEST/debug/installed-packages-${RELEASE}$([[ ${BUILD_MINIMAL} == yes ]] && echo "-minimal")$([[ ${BUILD_DESKTOP} == yes  ]] && echo "-desktop").list 2>&1
 
 	# clean up / prepare for making the image
 	umount_chroot "$SDCARD"
@@ -78,14 +75,18 @@ debootstrap_ng()
 		source $SRC/lib/fel-load.sh
 	else
 		prepare_partitions
-		# update initramfs to reflect any configuration changes since kernel installation
-		update_initramfs
 		create_image
 	fi
 
 	# stage: unmount tmpfs
-	[[ $use_tmpfs = yes ]] && umount $SDCARD
-
+	umount $SDCARD 2>&1
+	if [[ $use_tmpfs = yes ]]; then
+		while grep -qs '$SDCARD' /proc/mounts
+		do
+			umount $SDCARD
+			sleep 5
+		done
+	fi
 	rm -rf $SDCARD
 
 	# remove exit trap
@@ -99,7 +100,7 @@ debootstrap_ng()
 create_rootfs_cache()
 {
 	local packages_hash=$(get_package_list_hash)
-	local cache_type=$(if [[ ${BUILD_DESKTOP} == yes  ]]; then echo "desktop"; else echo "cli";fi)
+	local cache_type=$(if [[ ${BUILD_DESKTOP} == yes  ]]; then echo "desktop"; elif [[ ${BUILD_MINIMAL} == yes  ]]; then echo "minimal"; else echo "cli";fi)
 	local cache_name=${RELEASE}-${cache_type}-${ARCH}.$packages_hash.tar.lz4
 	local cache_fname=${SRC}/cache/rootfs/${cache_name}
 	local display_name=${RELEASE}-${cache_type}-${ARCH}.${packages_hash:0:3}...${packages_hash:29}.tar.lz4
@@ -115,6 +116,9 @@ create_rootfs_cache()
 		display_alert "Extracting $display_name" "$date_diff days old" "info"
 		pv -p -b -r -c -N "[ .... ] $display_name" "$cache_fname" | lz4 -dc | tar xp --xattrs -C $SDCARD/
 		[[ $? -ne 0 ]] && rm $cache_fname && exit_with_error "Cache $cache_fname is corrupted and was deleted. Restart."
+		rm $SDCARD/etc/resolv.conf
+		echo "nameserver $NAMESERVER" >> $SDCARD/etc/resolv.conf
+		create_sources_list "$RELEASE" "$SDCARD/"
 	else
 		display_alert "... remote not found" "Creating new rootfs cache for $RELEASE" "info"
 
@@ -130,8 +134,9 @@ create_rootfs_cache()
 		# fancy progress bars
 		[[ -z $OUTPUT_DIALOG ]] && local apt_extra_progress="--show-progress -o DPKG::Progress-Fancy=1"
 
+
 		display_alert "Installing base system" "Stage 1/2" "info"
-		eval 'debootstrap --include=${DEBOOTSTRAP_LIST} ${PACKAGE_LIST_EXCLUDE:+ --exclude=${PACKAGE_LIST_EXCLUDE// /,}} \
+		eval 'debootstrap --variant=minbase --include=${DEBOOTSTRAP_LIST// /,} ${PACKAGE_LIST_EXCLUDE:+ --exclude=${PACKAGE_LIST_EXCLUDE// /,}} \
 			--arch=$ARCH --components=${DEBOOTSTRAP_COMPONENTS} --foreign $RELEASE $SDCARD/ $apt_mirror' \
 			${PROGRESS_LOG_TO_FILE:+' | tee -a $DEST/debug/debootstrap.log'} \
 			${OUTPUT_DIALOG:+' | dialog --backtitle "$backtitle" --progressbox "Debootstrap (stage 1/2)..." $TTY_Y $TTY_X'} \
@@ -142,7 +147,7 @@ create_rootfs_cache()
 		cp /usr/bin/$QEMU_BINARY $SDCARD/usr/bin/
 
 		mkdir -p $SDCARD/usr/share/keyrings/
-		cp /usr/share/keyrings/debian-archive-keyring.gpg $SDCARD/usr/share/keyrings/
+		cp /usr/share/keyrings/*-archive-keyring.gpg $SDCARD/usr/share/keyrings/
 
 		display_alert "Installing base system" "Stage 2/2" "info"
 		eval 'chroot $SDCARD /bin/bash -c "/debootstrap/debootstrap --second-stage"' \
@@ -181,18 +186,6 @@ create_rootfs_cache()
 		# stage: create apt sources list
 		create_sources_list "$RELEASE" "$SDCARD/"
 
-		# stage: add armbian repository and install key
-		echo "deb http://apt.armbian.com $RELEASE main ${RELEASE}-utils ${RELEASE}-desktop" > $SDCARD/etc/apt/sources.list.d/armbian.list
-
-		cp $SRC/config/armbian.key $SDCARD
-		eval 'chroot $SDCARD /bin/bash -c "cat armbian.key | apt-key add -"' \
-			${OUTPUT_VERYSILENT:+' >/dev/null 2>/dev/null'}
-		rm $SDCARD/armbian.key
-
-		# compressing packages list to gain some space
-		echo "Acquire::GzipIndexes "true"; Acquire::CompressionTypes::Order:: "gz";" > $SDCARD/etc/apt/apt.conf.d/02compress-indexes
-		echo "Acquire::Languages "none";" > $SDCARD/etc/apt/apt.conf.d/no-languages
-
 		# add armhf arhitecture to arm64
 		[[ $ARCH == arm64 ]] && eval 'LC_ALL=C LANG=C chroot $SDCARD /bin/bash -c "dpkg --add-architecture armhf"'
 
@@ -228,15 +221,21 @@ create_rootfs_cache()
 
 		[[ ${PIPESTATUS[0]} -ne 0 ]] && exit_with_error "Installation of Armbian packages failed"
 
+		# stage: remove downloaded packages
+		chroot $SDCARD /bin/bash -c "apt-get clean"
+
 		# DEBUG: print free space
 		echo -e "\nFree space:"
 		eval 'df -h' ${PROGRESS_LOG_TO_FILE:+' | tee -a $DEST/debug/debootstrap.log'}
 
-		# stage: remove downloaded packages
-		chroot $SDCARD /bin/bash -c "apt-get clean"
-
 		# create list of installed packages for debug purposes
 		chroot $SDCARD /bin/bash -c "dpkg --get-selections" | grep -v deinstall | awk '{print $1}' | cut -f1 -d':' > ${cache_fname}.list 2>&1
+
+		# creating xapian index that synaptic runs faster
+		if [[ $BUILD_DESKTOP == yes ]]; then
+			display_alert "Recreating Synaptic search index" "Please wait" "info"
+			chroot $SDCARD /bin/bash -c "/usr/sbin/update-apt-xapian-index -u"
+		fi
 
 		# this is needed for the build process later since resolvconf generated file in /run is not saved
 		rm $SDCARD/etc/resolv.conf
@@ -260,7 +259,7 @@ create_rootfs_cache()
 	fi
 
 	# used for internal purposes. Faster rootfs cache rebuilding
-    if [[ -n "$ROOT_FS_CREATE_ONLY" ]]; then
+	if [[ -n "$ROOT_FS_CREATE_ONLY" ]]; then
 		[[ $use_tmpfs = yes ]] && umount $SDCARD
 		rm -rf $SDCARD
 		# remove exit trap
@@ -300,8 +299,7 @@ prepare_partitions()
 	# parttype[nfs] is empty
 
 	# metadata_csum and 64bit may need to be disabled explicitly when migrating to newer supported host OS releases
-	# TODO: Disable metadata_csum only for older releases (jessie)?
-	if [[ $(lsb_release -sc) == bionic ]]; then
+	if [[ $(lsb_release -sc) =~ bionic|buster|bullseye|cosmic|eoan|focal ]]; then
 		mkopts[ext4]='-q -m 2 -O ^64bit,^metadata_csum'
 	elif [[ $(lsb_release -sc) == xenial ]]; then
 		mkopts[ext4]='-q -m 2'
@@ -323,8 +321,11 @@ prepare_partitions()
 	# mountopts[ext2] is empty
 	# mountopts[fat] is empty
 	# mountopts[f2fs] is empty
-	mountopts[btrfs]=',commit=600,compress=lzo'
+	mountopts[btrfs]=",commit=600,compress=${BTRFS_COMPRESSION:lzo}"
 	# mountopts[nfs] is empty
+
+	# default BOOTSIZE to use if not specified
+	DEFAULT_BOOTSIZE=96	# MiB
 
 	# stage: determine partition configuration
 	if [[ -n $BOOTFS_TYPE ]]; then
@@ -332,24 +333,24 @@ prepare_partitions()
 		local bootfs=$BOOTFS_TYPE
 		local bootpart=1
 		local rootpart=2
-		[[ -z $BOOTSIZE || $BOOTSIZE -le 8 ]] && BOOTSIZE=64 # MiB
+		[[ -z $BOOTSIZE || $BOOTSIZE -le 8 ]] && BOOTSIZE=${DEFAULT_BOOTSIZE}
 	elif [[ $ROOTFS_TYPE != ext4 && $ROOTFS_TYPE != nfs ]]; then
 		# 2 partition setup for non-ext4 local root
 		local bootfs=ext4
 		local bootpart=1
 		local rootpart=2
-		[[ -z $BOOTSIZE || $BOOTSIZE -le 8 ]] && BOOTSIZE=64 # MiB
+		[[ -z $BOOTSIZE || $BOOTSIZE -le 8 ]] && BOOTSIZE=${DEFAULT_BOOTSIZE}
 	elif [[ $ROOTFS_TYPE == nfs ]]; then
 		# single partition ext4 /boot, no root
 		local bootfs=ext4
 		local bootpart=1
-		[[ -z $BOOTSIZE || $BOOTSIZE -le 8 ]] && BOOTSIZE=64 # MiB, For cleanup processing only
+		[[ -z $BOOTSIZE || $BOOTSIZE -le 8 ]] && BOOTSIZE=${DEFAULT_BOOTSIZE} # For cleanup processing only
 	elif [[ $CRYPTROOT_ENABLE == yes ]]; then
 		# 2 partition setup for encrypted /root and non-encrypted /boot
 		local bootfs=ext4
 		local bootpart=1
 		local rootpart=2
-		[[ -z $BOOTSIZE || $BOOTSIZE -le 8 ]] && BOOTSIZE=64 # MiB
+		[[ -z $BOOTSIZE || $BOOTSIZE -le 8 ]] && BOOTSIZE=${DEFAULT_BOOTSIZE}
 	else
 		# single partition ext4 root
 		local rootpart=1
@@ -372,7 +373,7 @@ prepare_partitions()
 			btrfs)
 				# Used for server images, currently no swap functionality, so disk space
 				# requirements are rather low since rootfs gets filled with compress-force=zlib
-				local sdsize=$(bc -l <<< "scale=0; (($imagesize * 1.0) / 4 + 1) * 4")
+				local sdsize=$(bc -l <<< "scale=0; (($imagesize * 1.1) / 4 + 1) * 4")
 				;;
 			*)
 				# Hardcoded overhead +25% is needed for desktop images,
@@ -389,7 +390,7 @@ prepare_partitions()
 	# stage: create blank image
 	display_alert "Creating blank image for rootfs" "$sdsize MiB" "info"
 	# truncate --size=${sdsize}M ${SDCARD}.raw # sometimes results in fs corruption, revert to previous know to work solution
-	dd if=/dev/zero bs=1M status=none count=$sdsize | pv -p -b -r -s $(( $sdsize * 1024 * 1024 )) | dd status=none of=${SDCARD}.raw
+	dd if=/dev/zero bs=1M status=none count=$sdsize | pv -p -b -r -s $(( $sdsize * 1024 * 1024 )) -N "[ .... ] dd" | dd status=none of=${SDCARD}.raw
 
 	# stage: calculate boot partition size
 	local bootstart=$(($OFFSET * 2048))
@@ -449,20 +450,20 @@ prepare_partitions()
 		[[ $ROOTFS_TYPE == ext4 ]] && tune2fs -o journal_data_writeback $rootdevice > /dev/null
 		
 		# force compression on btrfs
-		if [[ $ROOTFS_TYPE == btrfs ]]; then 
-			# see https://btrfs.wiki.kernel.org/index.php/Compression
-			case $BTRFS_COMPRESSION in
-				lzo)  local fscreateopt="-o compress-force=lzo";;
-				zstd) local fscreateopt="-o compress-force=zstd";;
-				*)    local fscreateopt="-o compress-force=zlib";;
-			esac
-		fi
+		#if [[ $ROOTFS_TYPE == btrfs ]]; then 
+		#	# see https://btrfs.wiki.kernel.org/index.php/Compression
+		#	case $BTRFS_COMPRESSION in
+		#		lzo)  local fscreateopt="-o compress-force=lzo";;
+		#		zstd) local fscreateopt="-o compress-force=zstd";;
+		#		*)    local fscreateopt="-o compress-force=zlib";;
+		#	esac
+		#fi
 		# create btrfs subvolumes
 		if [[ $ROOTFS_TYPE == btrfs && ${BTRFS_SUBVOLUMES^^} == YES ]]; then
 			
 			rm -rf ${MOUNT}_btrfsroot 2>/dev/null
 			mkdir -p ${MOUNT}_btrfsroot	
-			mount ${fscreateopt} $rootdevice ${MOUNT}_btrfsroot/
+			mount -o ${mountopts[$ROOTFS_TYPE]} $rootdevice ${MOUNT}_btrfsroot/
 
 			# using a flat layout, see https://btrfs.wiki.kernel.org/index.php/SysadminGuide#Layout	
 			btrfs subvolume create ${MOUNT}_btrfsroot/@
@@ -485,7 +486,7 @@ prepare_partitions()
 			# create directory for btrfs snapshots
 			mkdir "${MOUNT}_btrfsroot/.snapshots"
 		else
-			mount ${fscreateopt} $rootdevice $MOUNT/
+			mount -o ${mountopts[$ROOTFS_TYPE]} $rootdevice $MOUNT/
 		fi
 		
 		# create fstab (and crypttab) entry
@@ -499,10 +500,10 @@ prepare_partitions()
 		echo "$rootfs / ${mkfs[$ROOTFS_TYPE]} defaults,noatime,nodiratime${mountopts[$ROOTFS_TYPE]} 0 1" >> $SDCARD/etc/fstab
 		if [[ $ROOTFS_TYPE == btrfs && ${BTRFS_SUBVOLUMES^^} == YES ]]; then
 			# add subvolume mounts
-			echo "$rootdevice /home             btrfs  defaults,noatime,nodiratime,compress-force=zlib,subvol=@home  0 0" >> $SDCARD/etc/fstab
-			echo "$rootdevice /var              btrfs  defaults,noatime,nodiratime,compress-force=zlib,subvol=@var  0 0" >> $SDCARD/etc/fstab
-			echo "$rootdevice /var/lib          btrfs  defaults,noatime,nodiratime,compress-force=zlib,subvol=@varlib  0 0" >> $SDCARD/etc/fstab
-			echo "$rootdevice /run/.btrfsroot/cryptroot  btrfs  defaults,noatime,nodiratime,compress-force=zlib,subvolid=0,x-mount.mkdir  0 1" >> $SDCARD/etc/fstab
+			echo "$rootdevice /home             btrfs  defaults,noatime,nodiratime${mountopts[$ROOTFS_TYPE]},subvol=@home  0 0" >> $SDCARD/etc/fstab
+			echo "$rootdevice /var              btrfs  defaults,noatime,nodiratime${mountopts[$ROOTFS_TYPE]},subvol=@var  0 0" >> $SDCARD/etc/fstab
+			echo "$rootdevice /var/lib          btrfs  defaults,noatime,nodiratime${mountopts[$ROOTFS_TYPE]},subvol=@varlib  0 0" >> $SDCARD/etc/fstab
+			echo "$rootdevice /run/.btrfsroot/cryptroot  btrfs  defaults,noatime,nodiratime${mountopts[$ROOTFS_TYPE]},subvolid=0,x-mount.mkdir  0 1" >> $SDCARD/etc/fstab
 		fi
 	fi
 	if [[ -n $bootpart ]]; then
@@ -583,18 +584,23 @@ prepare_partitions()
 # for cryptroot-unlock to work:
 # https://serverfault.com/questions/907254/cryproot-unlock-with-dropbear-timeout-while-waiting-for-askpass
 #
-update_initramfs() {
-
+# since Debian buster, it has to be called within create_image() on the $MOUNT 
+# path instead of $SDCARD (which can be a tmpfs and breaks cryptsetup-initramfs).
+# see: https://github.com/armbian/build/issues/1584
+#
+update_initramfs()
+{
+	local chroot_target=$1
 	update_initramfs_cmd="update-initramfs -uv -k ${VER}-${LINUXFAMILY}"
 	display_alert "Updating initramfs..." "$update_initramfs_cmd" ""
-	cp /usr/bin/$QEMU_BINARY $SDCARD/usr/bin/
-	mount_chroot "$SDCARD/"
+	cp /usr/bin/$QEMU_BINARY $chroot_target/usr/bin/
+	mount_chroot "$chroot_target/"
 
-	chroot $SDCARD /bin/bash -c "$update_initramfs_cmd" >> $DEST/debug/install.log 2>&1
+	chroot $chroot_target /bin/bash -c "$update_initramfs_cmd" >> $DEST/debug/install.log 2>&1
 	display_alert "Updated initramfs." "for details see: $DEST/debug/install.log" "ext"
 
-	umount_chroot "$SDCARD/"
-	rm $SDCARD/usr/bin/$QEMU_BINARY
+	umount_chroot "$chroot_target/"
+	rm $chroot_target/usr/bin/$QEMU_BINARY
 
 } #############################################################################
 
@@ -605,8 +611,9 @@ update_initramfs() {
 create_image()
 {
 	# stage: create file name
-	local version="Armbian_${REVISION}_${BOARD^}_${DISTRIBUTION}_${RELEASE}_${BRANCH}_${VER/-$LINUXFAMILY/}"
+	local version="Armbian_${REVISION}_${BOARD^}_${RELEASE}_${BRANCH}_${VER/-$LINUXFAMILY/}"
 	[[ $BUILD_DESKTOP == yes ]] && version=${version}_desktop
+	[[ $BUILD_MINIMAL == yes ]] && version=${version}_minimal
 	[[ $ROOTFS_TYPE == nfs ]] && version=${version}_nfsboot
 
 	if [[ $ROOTFS_TYPE != nfs ]]; then
@@ -629,6 +636,9 @@ create_image()
 		rsync -aHWXh --info=progress2,stats1 $SDCARD/boot $MOUNT
 	fi
 
+	# stage: create final initramfs
+	update_initramfs $MOUNT
+
 	# DEBUG: print free space
 	display_alert "Free space:" "SD card" "info"
 	eval 'df -h' ${PROGRESS_LOG_TO_FILE:+' | tee -a $DEST/debug/debootstrap.log'}
@@ -649,18 +659,26 @@ create_image()
 		umount -l $MOUNT/ 2>/dev/null
 		umount -l ${MOUNT}_btrfsroot
 	fi
-	[[ $ROOTFS_TYPE != nfs ]] && umount -l $MOUNT 2>/dev/null
+	[[ $ROOTFS_TYPE != nfs ]] && umount -l $MOUNT
 	[[ $CRYPTROOT_ENABLE == yes ]] && cryptsetup luksClose $ROOT_MAPPER
+
+	# to make sure its unmounted
+	while grep -Eq '(${MOUNT}|${DESTIMG})' /proc/mounts
+	do
+		display_alert "Unmounting" "${MOUNT}" "info"
+		sleep 5
+	done
 
 	losetup -d $LOOP
 	rm -rf --one-file-system $DESTIMG $MOUNT
+
 	mkdir -p $DESTIMG
-	cp $SDCARD/etc/armbian.txt $DESTIMG
 	if [[ ${CRYPTROOT_ENABLE^^} == YES ]]; then
 		IMGEXT="img.src"
 	else
 		IMGEXT="img"
 	fi
+	fingerprint_image "$DESTIMG/${version}.$IMGEXT.txt" "${version}"
 	mv ${SDCARD}.raw $DESTIMG/${version}.$IMGEXT
 
 	if [[ $BUILD_ALL != yes ]]; then
@@ -671,8 +689,8 @@ create_image()
 		if [[ $COMPRESS_OUTPUTIMAGE == *sha* ]]; then
 			cd $DESTIMG
 			display_alert "SHA256 calculating" "${version}.$IMGEXT" "info"
-			sha256sum -b ${version}.$IMGEXT > sha256sum.sha
-			cp sha256sum.sha "$DEST/images/${version}.$IMGEXT.sha"
+			sha256sum -b ${version}.$IMGEXT > ${version}.$IMGEXT.sha
+			cp ${version}.$IMGEXT.sha "$DEST/images/${version}.$IMGEXT.sha"
 			cd ..
 		fi
 
@@ -702,7 +720,8 @@ create_image()
 			pigz < $DESTIMG/${version}.$IMGEXT > $DEST/images/${version}.$IMGEXT.gz
 		fi
 
-		mv $DESTIMG/${version}.$IMGEXT $DEST/images/${version}.$IMGEXT
+		mv $DESTIMG/${version}.$IMGEXT.txt $DEST/images/${version}.$IMGEXT.txt || exit 1
+		mv $DESTIMG/${version}.$IMGEXT $DEST/images/${version}.$IMGEXT || exit 1
 		rm -rf $DESTIMG
 	fi
 	display_alert "Done building" "$DEST/images/${version}.$IMGEXT" "info"
@@ -711,14 +730,31 @@ create_image()
 	[[ $(type -t post_build_image) == function ]] && post_build_image "$DEST/images/${version}.$IMGEXT"
 
 	# write image to SD card
-	if [[ $(lsblk "$CARD_DEVICE" 2>/dev/null) && -f $DEST/images/${version}.img && $COMPRESS_OUTPUTIMAGE != yes ]]; then
-		display_alert "Writing image" "$CARD_DEVICE" "info"
-		balena-etcher $DEST/images/${version}.img -d $CARD_DEVICE -y
-		if [ $? -eq 0 ]; then
-			display_alert "Writing succeeded" "${version}.img" "info"
+	if [[ $(lsblk "$CARD_DEVICE" 2>/dev/null) && -f $DEST/images/${version}.$IMGEXT ]]; then
+
+		# make sha256sum if it does not exists. we need it for comparisson
+		if [[ -f "$DEST/images/${version}".$IMGEXT.sha ]]; then
+			local ifsha=$(cat $DEST/images/${version}.$IMGEXT.sha | awk '{print $1}')
 		else
-			display_alert "Writing failed" "${version}.img" "err"
+			local ifsha=$(sha256sum -b "$DEST/images/${version}".$IMGEXT | awk '{print $1}')
 		fi
+
+		display_alert "Writing image" "$CARD_DEVICE ${readsha}" "info"
+
+		# write to SD card
+		pv -p -b -r -c -N "[ .... ] dd" $DEST/images/${version}.$IMGEXT | dd of=$CARD_DEVICE bs=1M iflag=fullblock oflag=direct status=none
+
+		# read and compare
+		display_alert "Verifying. Please wait!"
+		local ofsha=$(dd if=$CARD_DEVICE count=$(du -b $DEST/images/${version}.$IMGEXT | cut -f1) status=none iflag=count_bytes oflag=direct | sha256sum | awk '{print $1}')
+		if [[ $ifsha == $ofsha ]]; then
+			display_alert "Writing verified" "${version}.$IMGEXT" "info"
+		else
+			display_alert "Writing failed" "${version}.$IMGEXT" "err"
+		fi
+	elif [[ `systemd-detect-virt` == 'docker' && -n $CARD_DEVICE ]]; then
+		# display warning when we want to write sd card under Docker
+		display_alert "Can't write to $CARD_DEVICE" "Enable docker privileged mode in config-docker.conf" "wrn"
 	fi
 
 } #############################################################################

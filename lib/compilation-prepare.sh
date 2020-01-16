@@ -12,27 +12,85 @@
 
 compilation_prepare()
 {
- 
-	# AUFS - advanced multi layered unification filesystem for Kernel 5.1.y
+
+	# Packaging patch for modern kernels should be one for all. Currently we have it per kernel family since we can't have one
+	# Maintaining one from central location starting with 5.3+
+	# Temporally set for new "default->legacy,next->current" family naming
+
+	if linux-version compare $version ge 5.3 && [[ "$BRANCH" == current || "$BRANCH" == dev ]]; then
+		display_alert "Adjustin" "packaging" "info"
+		cd ${SRC}/cache/sources/${LINUXSOURCEDIR}
+		process_patch_file "${SRC}/patch/misc/general-packaging-5.3.y.patch"                "applying"
+	fi
+
+	if [[ $version == "4.19."* ]] && [[ "$LINUXFAMILY" == sunxi* || "$LINUXFAMILY" == meson64 || "$LINUXFAMILY" == mvebu64 || "$LINUXFAMILY" == mt7623 || "$LINUXFAMILY" == mvebu ]]; then
+		display_alert "Adjustin" "packaging" "info"
+		cd ${SRC}/cache/sources/${LINUXSOURCEDIR}
+		process_patch_file "${SRC}/patch/misc/general-packaging-4.19.y.patch"                "applying"
+	fi
+
+	if [[ $version == "4.14."* ]] && [[ "$LINUXFAMILY" == s5p6818 || "$LINUXFAMILY" == mvebu64 || "$LINUXFAMILY" == imx7d || "$LINUXFAMILY" == odroidxu4 || "$LINUXFAMILY" == mvebu ]]; then
+		display_alert "Adjustin" "packaging" "info"
+		cd ${SRC}/cache/sources/${LINUXSOURCEDIR}
+		process_patch_file "${SRC}/patch/misc/general-packaging-4.14.y.patch"                "applying"
+	fi
+
+	if [[ $version == "4.4."* || $version == "4.9."* ]] && [[ "$LINUXFAMILY" == rockpis || "$LINUXFAMILY" == rk3399 ]]; then
+		display_alert "Adjustin" "packaging" "info"
+		cd ${SRC}/cache/sources/${LINUXSOURCEDIR}
+		process_patch_file "${SRC}/patch/misc/general-packaging-4.4.y-rk3399.patch"                "applying"
+	fi
+
+	if [[ $version == "4.4."* ]] && [[ "$LINUXFAMILY" == rockchip64 ]]; then
+		display_alert "Adjustin" "packaging" "info"
+		cd ${SRC}/cache/sources/${LINUXSOURCEDIR}
+		process_patch_file "${SRC}/patch/misc/general-packaging-4.4.y-rockchip64.patch"                "applying"
+	fi
+
+	if [[ $version == "4.4."* ]] && [[ "$LINUXFAMILY" == rockchip ]]; then
+                display_alert "Adjustin" "packaging" "info"
+                cd ${SRC}/cache/sources/${LINUXSOURCEDIR}
+                process_patch_file "${SRC}/patch/misc/general-packaging-4.4.y.patch"                "applying"
+        fi
+
+	if [[ $version == "4.9."* ]] && [[ "$LINUXFAMILY" == meson64 ]]; then
+		display_alert "Adjustin" "packaging" "info"
+		cd ${SRC}/cache/sources/${LINUXSOURCEDIR}
+		process_patch_file "${SRC}/patch/misc/general-packaging-4.9.y.patch"                "applying"
+	fi
+
+	# AUFS - advanced multi layered unification filesystem for Kernel > 5.1
 	#
 	# Older versions have AUFS support with a patch
 
-	if linux-version compare $version ge 5.1 && linux-version compare $version le 5.2 && [ "$AUFS" == yes ]; then
+	if linux-version compare $version ge 5.1 && [ "$AUFS" == yes ]; then
 
 		# attach to specifics tag or branch
-		local aufsver="branch:aufs5.1"
+		local aufstag=$(echo ${version} | cut -f 1-2 -d ".")
 
-		display_alert "Adding" "AUFS 5.1" "info"
+		# check if Mr. Okajima already made a branch for this version
+		git ls-remote --exit-code --heads https://github.com/sfjro/aufs5-standalone aufs${aufstag} >/dev/null
 
-		fetch_from_repo "https://github.com/sfjro/aufs5-standalone" "aufs5" "branch:${aufsver}" "yes"
-		cd ${SRC}/cache/sources/${LINUXSOURCEDIR}
-		process_patch_file "${SRC}/cache/sources/aufs5/${aufsver#*:}/aufs5-kbuild.patch"		"applying"
-		process_patch_file "${SRC}/cache/sources/aufs5/${aufsver#*:}/aufs5-base.patch"			"applying"
-		process_patch_file "${SRC}/cache/sources/aufs5/${aufsver#*:}/aufs5-mmap.patch"			"applying"
-		process_patch_file "${SRC}/cache/sources/aufs5/${aufsver#*:}/aufs5-standalone.patch"	"applying"		
-		cp -R ${SRC}/cache/sources/aufs5/${aufsver#*:}/{Documentation,fs} .
-		cp ${SRC}/cache/sources/aufs5/${aufsver#*:}/include/uapi/linux/aufs_type.h include/uapi/linux/
+		if [ "$?" -ne "0" ]; then
+			# then use rc branch
+			aufstag="5.x-rcN"
+			git ls-remote --exit-code --heads https://github.com/sfjro/aufs5-standalone aufs${aufstag} >/dev/null
+		fi
 
+		if [ "$?" -eq "0" ]; then
+
+			display_alert "Adding" "AUFS ${aufstag}" "info"
+			local aufsver="branch:aufs${aufstag}"
+			fetch_from_repo "https://github.com/sfjro/aufs5-standalone" "aufs5" "branch:${aufsver}" "yes"
+			cd ${SRC}/cache/sources/${LINUXSOURCEDIR}
+			process_patch_file "${SRC}/cache/sources/aufs5/${aufsver#*:}/aufs5-kbuild.patch"		"applying"
+			process_patch_file "${SRC}/cache/sources/aufs5/${aufsver#*:}/aufs5-base.patch"			"applying"
+			process_patch_file "${SRC}/cache/sources/aufs5/${aufsver#*:}/aufs5-mmap.patch"			"applying"
+			process_patch_file "${SRC}/cache/sources/aufs5/${aufsver#*:}/aufs5-standalone.patch"	"applying"
+			cp -R ${SRC}/cache/sources/aufs5/${aufsver#*:}/{Documentation,fs} .
+			cp ${SRC}/cache/sources/aufs5/${aufsver#*:}/include/uapi/linux/aufs_type.h include/uapi/linux/
+
+		fi
 	fi
 
 
@@ -43,11 +101,16 @@ compilation_prepare()
 
 		# attach to specifics tag or branch
 		#local wirever="branch:master"
-		local wirever="tag:0.0.20190702"
+		local wirever="tag:0.0.20191219"
 
 		display_alert "Adding" "WireGuard ${wirever} " "info"
 
-		fetch_from_repo "https://git.zx2c4.com/WireGuard" "wireguard" "${wirever}" "yes"
+		fetch_from_repo "https://git.zx2c4.com/wireguard-monolithic-historical" "wireguard" "${wirever}" "yes"
+
+		#if linux-version compare $version gt 5.6; then
+		#	fetch_from_repo "https://git.zx2c4.com/wireguard-linux" "wireguard" "stable" "yes"
+		#fi
+
 		cd ${SRC}/cache/sources/${LINUXSOURCEDIR}
 		rm -rf ${SRC}/cache/sources/${LINUXSOURCEDIR}/net/wireguard
 		cp -R ${SRC}/cache/sources/wireguard/${wirever#*:}/src/ ${SRC}/cache/sources/${LINUXSOURCEDIR}/net/wireguard
@@ -102,6 +165,64 @@ compilation_prepare()
 		# Add to section Makefile
 		echo "obj-\$(CONFIG_RTL8812AU) += rtl8812au/" >> $SRC/cache/sources/${LINUXSOURCEDIR}/drivers/net/wireless/Makefile
 		sed -i '/source "drivers\/net\/wireless\/ti\/Kconfig"/a source "drivers\/net\/wireless\/rtl8812au\/Kconfig"' \
+		$SRC/cache/sources/${LINUXSOURCEDIR}/drivers/net/wireless/Kconfig
+
+	fi
+
+	# Wireless drivers for Xradio XR819 chipsets
+	if linux-version compare $version ge 4.19 && [[ "$LINUXFAMILY" == sunxi* ]] && [[ "$EXTRAWIFI" == yes ]]; then
+
+		display_alert "Adding" "Wireless drivers for Xradio XR819 chipsets" "info"
+
+                fetch_from_repo "https://github.com/karabek/xradio" "xradio" "branch:master" "yes"
+		cd ${SRC}/cache/sources/${LINUXSOURCEDIR}
+                rm -rf ${SRC}/cache/sources/${LINUXSOURCEDIR}/drivers/net/wireless/xradio
+                mkdir -p ${SRC}/cache/sources/${LINUXSOURCEDIR}/drivers/net/wireless/xradio/
+                cp ${SRC}/cache/sources/xradio/master/*.{h,c} \
+                ${SRC}/cache/sources/${LINUXSOURCEDIR}/drivers/net/wireless/xradio/
+
+                # Makefile
+                cp ${SRC}/cache/sources/xradio/master/Makefile \
+                ${SRC}/cache/sources/${LINUXSOURCEDIR}/drivers/net/wireless/xradio/Makefile
+                cp ${SRC}/cache/sources/xradio/master/Kconfig \
+                ${SRC}/cache/sources/${LINUXSOURCEDIR}/drivers/net/wireless/xradio/Kconfig
+
+                # Add to section Makefile
+                echo "obj-\$(CONFIG_WLAN_VENDOR_XRADIO) += xradio/" >> $SRC/cache/sources/${LINUXSOURCEDIR}/drivers/net/wireless/Makefile
+                sed -i '/source "drivers\/net\/wireless\/ti\/Kconfig"/a source "drivers\/net\/wireless\/xradio\/Kconfig"' \
+                $SRC/cache/sources/${LINUXSOURCEDIR}/drivers/net/wireless/Kconfig
+
+	fi
+
+	# Wireless drivers for Realtek RTL8811CU and RTL8821C chipsets
+
+	if linux-version compare $version ge 3.14 && [ "$EXTRAWIFI" == yes ]; then
+
+		# attach to specifics tag or branch
+		local rtl8811cuver="branch:master"
+
+		display_alert "Adding" "Wireless drivers for Realtek RTL8811CU and RTL8821C chipsets ${rtl8811euver}" "info"
+
+		fetch_from_repo "https://github.com/brektrou/rtl8821CU" "rtl8811cu" "${rtl8811cuver}" "yes"
+		cd ${SRC}/cache/sources/${LINUXSOURCEDIR}
+		rm -rf ${SRC}/cache/sources/${LINUXSOURCEDIR}/drivers/net/wireless/rtl8811cu
+		mkdir -p ${SRC}/cache/sources/${LINUXSOURCEDIR}/drivers/net/wireless/rtl8811cu/
+		cp -R ${SRC}/cache/sources/rtl8811cu/${rtl8811cuver#*:}/{core,hal,include,os_dep,platform,rtl8821c.mk} \
+		${SRC}/cache/sources/${LINUXSOURCEDIR}/drivers/net/wireless/rtl8811cu
+
+		# Makefile
+		cp ${SRC}/cache/sources/rtl8811cu/${rtl8811cuver#*:}/Makefile \
+		${SRC}/cache/sources/${LINUXSOURCEDIR}/drivers/net/wireless/rtl8811cu/Makefile
+		cp ${SRC}/cache/sources/rtl8811cu/${rtl8811cuver#*:}/Kconfig \
+		${SRC}/cache/sources/${LINUXSOURCEDIR}/drivers/net/wireless/rtl8811cu/Kconfig
+
+		# Address ARM related bug https://github.com/aircrack-ng/rtl8812au/issues/233
+		sed -i "s/^CONFIG_MP_VHT_HW_TX_MODE.*/CONFIG_MP_VHT_HW_TX_MODE = n/" \
+		${SRC}/cache/sources/${LINUXSOURCEDIR}/drivers/net/wireless/rtl8811cu/Makefile
+
+		# Add to section Makefile
+		echo "obj-\$(CONFIG_RTL8821CU) += rtl8811cu/" >> $SRC/cache/sources/${LINUXSOURCEDIR}/drivers/net/wireless/Makefile
+		sed -i '/source "drivers\/net\/wireless\/ti\/Kconfig"/a source "drivers\/net\/wireless\/rtl8811cu\/Kconfig"' \
 		$SRC/cache/sources/${LINUXSOURCEDIR}/drivers/net/wireless/Kconfig
 
 	fi

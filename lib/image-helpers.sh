@@ -40,10 +40,14 @@ mount_chroot()
 umount_chroot()
 {
 	local target=$1
-	umount -l "${target}"/dev/pts >/dev/null 2>&1
-	umount -l "${target}"/dev >/dev/null 2>&1
-	umount -l "${target}"/proc >/dev/null 2>&1
-	umount -l "${target}"/sys >/dev/null 2>&1
+	display_alert "Unmounting" "$target" "info"
+	while grep -Eq "${target}.*(dev|proc|sys)" /proc/mounts
+	do
+		umount -l --recursive "${target}"/dev >/dev/null 2>&1
+		umount -l "${target}"/proc >/dev/null 2>&1
+		umount -l "${target}"/sys >/dev/null 2>&1
+		sleep 5
+	done
 } #############################################################################
 
 # unmount_on_exit
@@ -77,15 +81,6 @@ check_loop_device()
 	fi
 } #############################################################################
 
-install_external_applications()
-{
-	display_alert "Installing extra applications and drivers" "" "info"
-
-	for plugin in "${SRC}"/packages/extras/*.sh; do
-		source "${plugin}"
-	done
-}  #############################################################################
-
 # write_uboot <loopdev>
 #
 # writes u-boot to loop device
@@ -97,7 +92,7 @@ write_uboot()
 	local loop=$1
 	display_alert "Writing U-boot bootloader" "$loop" "info"
 	mkdir -p /tmp/u-boot/
-	dpkg -x "${DEST}/debs/${CHOSEN_UBOOT}_${REVISION}_${ARCH}.deb" /tmp/u-boot/
+	dpkg -x "${DEB_STORAGE}/${CHOSEN_UBOOT}_${REVISION}_${ARCH}.deb" /tmp/u-boot/
 	write_uboot_platform "/tmp/u-boot/usr/lib/${CHOSEN_UBOOT}_${REVISION}_${ARCH}" "$loop"
 	[[ $? -ne 0 ]] && exit_with_error "U-boot bootloader failed to install" "@host"
 	rm -r /tmp/u-boot/
@@ -119,7 +114,7 @@ customize_image()
 	display_alert "Calling image customization script" "customize-image.sh" "info"
 	chroot "${SDCARD}" /bin/bash -c "/tmp/customize-image.sh $RELEASE $LINUXFAMILY $BOARD $BUILD_DESKTOP"
 	CUSTOMIZE_IMAGE_RC=$?
-	umount "${SDCARD}"/tmp/overlay
+	umount -i "${SDCARD}"/tmp/overlay >/dev/null 2>&1
 	mountpoint -q "${SDCARD}"/tmp/overlay || rm -r "${SDCARD}"/tmp/overlay
 	umount "${SDCARD}"/tmp/cache
 	mountpoint -q "${SDCARD}"/tmp/cache || rm -r "${SDCARD}"/tmp/cache
@@ -135,6 +130,9 @@ install_deb_chroot()
 	name=$(basename "${package}")
 	cp "${package}" "${SDCARD}/root/${name}"
 	display_alert "Installing" "$name"
-	chroot "${SDCARD}" /bin/bash -c "dpkg -i /root/$name" >> "${DEST}"/debug/install.log 2>&1
+	[[ $NO_APT_CACHER != yes ]] && local apt_extra="-o Acquire::http::Proxy=\"http://${APT_PROXY_ADDR:-localhost:3142}\" -o Acquire::http::Proxy::localhost=\"DIRECT\""
+	LC_ALL=C LANG=C chroot "${SDCARD}" /bin/bash -c "DEBIAN_FRONTEND=noninteractive apt-get -yqq \
+		$apt_extra --no-install-recommends install ./root/$name" >> "${DEST}"/debug/install.log 2>&1
+
 	rm -f "${SDCARD}/root/${name}"
 }
