@@ -99,17 +99,34 @@ debootstrap_ng()
 #
 create_rootfs_cache()
 {
-	local packages_hash=$(get_package_list_hash)
-	local cache_type=$(if [[ ${BUILD_DESKTOP} == yes  ]]; then echo "desktop"; elif [[ ${BUILD_MINIMAL} == yes  ]]; then echo "minimal"; else echo "cli";fi)
-	local cache_name=${RELEASE}-${cache_type}-${ARCH}.$packages_hash.tar.lz4
-	local cache_fname=${SRC}/cache/rootfs/${cache_name}
-	local display_name=${RELEASE}-${cache_type}-${ARCH}.${packages_hash:0:3}...${packages_hash:29}.tar.lz4
-
-	display_alert "Checking for local cache" "$display_name" "info"
-	if [[ ! -f $cache_fname && "$ROOT_FS_CREATE_ONLY" != "force" ]]; then
-		display_alert "searching on servers"
-		download_and_verify "_rootfs" "$cache_name"
+	if [[ "$ROOT_FS_CREATE_ONLY" == "force" ]]; then
+		local cycles=1
+		else
+		local cycles=2
 	fi
+	# seek last cache, proceed to previous otherwise build it
+	for ((n=0;n<${cycles};n++)); do
+
+		local packages_hash=$(get_package_list_hash "$(($ROOTFSCACHE_VERSION - $n))")
+		local cache_type=$(if [[ ${BUILD_DESKTOP} == yes  ]]; then echo "desktop"; elif [[ ${BUILD_MINIMAL} == yes  ]]; then echo "minimal"; else echo "cli";fi)
+		local cache_name=${RELEASE}-${cache_type}-${ARCH}.$packages_hash.tar.lz4
+		local cache_fname=${SRC}/cache/rootfs/${cache_name}
+		local display_name=${RELEASE}-${cache_type}-${ARCH}.${packages_hash:0:3}...${packages_hash:29}.tar.lz4
+
+		display_alert "Checking for local cache" "$display_name" "info"
+
+		if [[ ! -f $cache_fname && "$ROOT_FS_CREATE_ONLY" != "force" ]]; then
+			display_alert "searching on servers"
+			download_and_verify "_rootfs" "$cache_name"
+		fi
+
+		if [[ -f $cache_fname ]]; then
+			break
+		else
+			display_alert "not found: try to use previous cache"
+		fi
+
+	done
 
 	if [[ -f $cache_fname && "$ROOT_FS_CREATE_ONLY" != "force" ]]; then
 		local date_diff=$(( ($(date +%s) - $(stat -c %Y $cache_fname)) / 86400 ))
@@ -124,7 +141,7 @@ create_rootfs_cache()
 
 		# stage: debootstrap base system
 		if [[ $NO_APT_CACHER != yes ]]; then
-			# apt-cacher-ng apt proxy parameter
+			# apt-cacher-ng apt-get proxy parameter
 			local apt_extra="-o Acquire::http::Proxy=\"http://${APT_PROXY_ADDR:-localhost:3142}\""
 			local apt_mirror="http://${APT_PROXY_ADDR:-localhost:3142}/$APT_MIRROR"
 		else
@@ -183,7 +200,7 @@ create_rootfs_cache()
 			eval 'LC_ALL=C LANG=C chroot $SDCARD /bin/bash -c "setupcon --save"'
 		fi
 
-		# stage: create apt sources list
+		# stage: create apt-get sources list
 		create_sources_list "$RELEASE" "$SDCARD/"
 
 		# add armhf arhitecture to arm64
@@ -321,7 +338,7 @@ prepare_partitions()
 	# mountopts[ext2] is empty
 	# mountopts[fat] is empty
 	# mountopts[f2fs] is empty
-	mountopts[btrfs]=",commit=600,compress=${BTRFS_COMPRESSION:lzo}"
+	mountopts[btrfs]=',commit=600,compress=${BTRFS_COMPRESSION:lzo}'
 	# mountopts[nfs] is empty
 
 	# default BOOTSIZE to use if not specified
@@ -584,7 +601,7 @@ prepare_partitions()
 # for cryptroot-unlock to work:
 # https://serverfault.com/questions/907254/cryproot-unlock-with-dropbear-timeout-while-waiting-for-askpass
 #
-# since Debian buster, it has to be called within create_image() on the $MOUNT 
+# since Debian buster, it has to be called within create_image() on the $MOUNT
 # path instead of $SDCARD (which can be a tmpfs and breaks cryptsetup-initramfs).
 # see: https://github.com/armbian/build/issues/1584
 #
@@ -682,11 +699,13 @@ create_image()
 	mv ${SDCARD}.raw $DESTIMG/${version}.$IMGEXT
 
 	if [[ $BUILD_ALL != yes ]]; then
-		if [[ $COMPRESS_OUTPUTIMAGE == yes ]]; then
+		if [[ $COMPRESS_OUTPUTIMAGE == "" || $COMPRESS_OUTPUTIMAGE == no ]]; then
+			COMPRESS_OUTPUTIMAGE="sha,gpg,img"
+		elif [[ $COMPRESS_OUTPUTIMAGE == yes ]]; then
 			COMPRESS_OUTPUTIMAGE="sha,gpg,7z"
 		fi
 
-		if [[ $COMPRESS_OUTPUTIMAGE == *sha* ]]; then
+		if [[ $COMPRESS_OUTPUTIMAGE == *sha* || -n $CARD_DEVICE ]]; then
 			cd $DESTIMG
 			display_alert "SHA256 calculating" "${version}.$IMGEXT" "info"
 			sha256sum -b ${version}.$IMGEXT > ${version}.$IMGEXT.sha
@@ -706,22 +725,32 @@ create_image()
 			cd ..
 		fi
 
+		# compress image
 		if [[ $COMPRESS_OUTPUTIMAGE == *7z* ]]; then
 			[[ -f $DEST/images/$CRYPTROOT_SSH_UNLOCK_KEY_NAME ]] && cp $DEST/images/$CRYPTROOT_SSH_UNLOCK_KEY_NAME $DESTIMG/
 			# compress image
 			cd $DESTIMG
 			display_alert "Compressing" "$DEST/images/${version}.7z" "info"
-			7za a -t7z -bd -m0=lzma2 -mx=9 -mfb=64 -md=32m -ms=on $DEST/images/${version}.7z ${version}.key ${version}.$IMGEXT armbian.txt *.asc sha256sum.sha install-zhiverbox.sh >/dev/null 2>&1
+			7za a -t7z -bd -m0=lzma2 -mx=9 -mfb=64 -md=32m -ms=on \
+			$DEST/images/${version}.7z ${version}.key ${version}.$IMGEXT* armbian.txt *.asc sha256sum.sha install-zhiverbox.sh >/dev/null 2>&1
+			find $DEST/images/ -type \
+			f \( -name "${version}.$IMGEXT" -o -name "${version}.$IMGEXT.asc" -o -name "${version}.$IMGEXT.sha" \) -print0 \
+			| xargs -0 rm >/dev/null 2>&1
 			cd ..
 		fi
 
 		if [[ $COMPRESS_OUTPUTIMAGE == *gz* ]]; then
 			display_alert "Compressing" "$DEST/images/${version}.$IMGEXT.gz" "info"
-			pigz < $DESTIMG/${version}.$IMGEXT > $DEST/images/${version}.$IMGEXT.gz
+			pigz -3 < $DESTIMG/${version}.$IMGEXT > $DEST/images/${version}.$IMGEXT.gz
 		fi
-
-		mv $DESTIMG/${version}.$IMGEXT.txt $DEST/images/${version}.$IMGEXT.txt || exit 1
-		mv $DESTIMG/${version}.$IMGEXT $DEST/images/${version}.$IMGEXT || exit 1
+		if [[ $COMPRESS_OUTPUTIMAGE == *xz* ]]; then
+			display_alert "Compressing" "$DEST/images/${version}.$IMGEXT.xz" "info"
+			pixz -3 < $DESTIMG/${version}.$IMGEXT > $DEST/images/${version}.$IMGEXT.xz
+		fi
+		if [[ $COMPRESS_OUTPUTIMAGE == *img* ]]; then
+			[[ -f $DESTIMG/${version}.$IMGEXT.txt ]] && mv $DESTIMG/${version}.$IMGEXT.txt $DEST/images/${version}.$IMGEXT.txt
+			mv $DESTIMG/${version}.$IMGEXT $DEST/images/${version}.$IMGEXT || exit 1
+		fi
 		rm -rf $DESTIMG
 	fi
 	display_alert "Done building" "$DEST/images/${version}.$IMGEXT" "info"
