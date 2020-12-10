@@ -17,9 +17,12 @@ create_board_package()
 {
 	display_alert "Creating board support package" "$BOARD $BRANCH" "info"
 
-	local destination=$SRC/.tmp/${RELEASE}/${CHOSEN_ROOTFS}_${REVISION}_${ARCH}
-	rm -rf "${destination}"
+	bsptempdir=$(mktemp -d)
+	chmod 700 ${bsptempdir}
+	trap "rm -rf \"${bsptempdir}\" ; exit 0" 0 1 2 3 15
+	local destination=${bsptempdir}/${RELEASE}/${CHOSEN_ROOTFS}_${REVISION}_${ARCH}
 	mkdir -p "${destination}"/DEBIAN
+	cd $destination
 
 	# install copy of boot script & environment file
 	local bootscript_src=${BOOTSCRIPT%%:*}
@@ -41,6 +44,7 @@ create_board_package()
 	# Replaces: unattended-upgrades may be needed to replace /etc/apt/apt.conf.d/50unattended-upgrades
 	# (distributions provide good defaults, so this is not needed currently)
 	# Depends: linux-base is needed for "linux-version" command in initrd cleanup script
+	# Depends: fping is needed for armbianmonitor to upload armbian-hardware-monitor.log
 	cat <<-EOF > "${destination}"/DEBIAN/control
 	Package: linux-${RELEASE}-root-${DEB_BRANCH}${BOARD}
 	Version: $REVISION
@@ -49,7 +53,7 @@ create_board_package()
 	Installed-Size: 1
 	Section: kernel
 	Priority: optional
-	Depends: bash, linux-base, u-boot-tools, initramfs-tools, lsb-release
+	Depends: bash, linux-base, u-boot-tools, initramfs-tools, lsb-release, fping
 	Provides: armbian-bsp
 	Conflicts: armbian-bsp
 	Suggests: armbian-config
@@ -73,6 +77,9 @@ create_board_package()
 	    mv /etc/network/interfaces.tmp /etc/network/interfaces
 
 	fi
+
+	# fixing ramdisk corruption when using lz4 compression method
+	sed -i "s/^COMPRESS=.*/COMPRESS=gzip/" /etc/initramfs-tools/initramfs.conf
 
 	# swap
 	grep -q vm.swappiness /etc/sysctl.conf
@@ -99,7 +106,6 @@ create_board_package()
 	[ -f "/etc/update-motd.d/99-point-to-faq" ] && rm /etc/update-motd.d/99-point-to-faq
 	[ -f "/etc/update-motd.d/80-esm" ] && rm /etc/update-motd.d/80-esm
 	[ -f "/etc/update-motd.d/80-livepatch" ] && rm /etc/update-motd.d/80-livepatch
-	[ -f "/etc/apt/apt.conf.d/50unattended-upgrades" ] && rm /etc/apt/apt.conf.d/50unattended-upgrades
 	[ -f "/etc/apt/apt.conf.d/02compress-indexes" ] && rm /etc/apt/apt.conf.d/02compress-indexes
 	[ -f "/etc/apt/apt.conf.d/02periodic" ] && rm /etc/apt/apt.conf.d/02periodic
 	[ -f "/etc/apt/apt.conf.d/no-languages" ] && rm /etc/apt/apt.conf.d/no-languages
@@ -160,7 +166,7 @@ create_board_package()
 
 	EOF
 
-	if [[ $RELEASE == bionic && $LINUXFAMILY != imx* ]]; then
+	if [[ $RELEASE == bionic ]] || [[ $RELEASE == focal && $BOARDFAMILY == sun50iw6 ]]; then
 		cat <<-EOF >> "${destination}"/DEBIAN/postinst
 		# temporally disable acceleration on some arch in Bionic due to broken mesa packages
 		echo 'Section "Device"
@@ -234,6 +240,10 @@ fi
 		mv /usr/lib/chromium-browser/master_preferences.dpkg-dist /usr/lib/chromium-browser/master_preferences
 	fi
 
+	sed -i "s/^PRETTY_NAME=.*/PRETTY_NAME=\"Armbian $REVISION "${RELEASE^}"\"/" /etc/os-release
+	echo "Armbian ${REVISION} ${RELEASE^} \\l \n" > /etc/issue
+	echo "Armbian ${REVISION} ${RELEASE^}" > /etc/issue.net
+
 	systemctl --no-reload enable armbian-hardware-monitor.service armbian-hardware-optimize.service armbian-zram-config.service >/dev/null 2>&1
 	exit 0
 	EOF
@@ -246,7 +256,7 @@ fi
 	#EOF
 
 	# copy common files from a premade directory structure
-	rsync -a "${SRC}"/packages/bsp/common/* "${destination}"/
+	rsync -a ${SRC}/packages/bsp/common/* ${destination}
 
 	# trigger uInitrd creation after installation, to apply
 	# /etc/initramfs/post-update.d/99-uboot
@@ -298,7 +308,7 @@ fi
 	display_alert "Building package" "$CHOSEN_ROOTFS" "info"
 	fakeroot dpkg-deb -b "${destination}" "${destination}.deb" >> "${DEST}"/debug/install.log 2>&1
 	mkdir -p "${DEB_STORAGE}/${RELEASE}/"
-	mv "${destination}.deb" "${DEB_STORAGE}/${RELEASE}/"
+	rsync --remove-source-files -rq "${destination}.deb" "${DEB_STORAGE}/${RELEASE}/"
 	# cleanup
-	rm -rf "${destination}"
+	rm -rf ${bsptempdir}
 }

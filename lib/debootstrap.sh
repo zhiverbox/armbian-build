@@ -53,10 +53,10 @@ debootstrap_ng()
 	install_common
 
 	# install locally built packages
-	[[ $EXTERNAL_NEW == compile ]] && chroot_installpackages_local
+	[[ $EXTERNAL_NEW == compile ]] && chroot_installpackages_local >> "${DEST}"/debug/install.log 2>&1
 
 	# install from apt.armbian.com
-	[[ $EXTERNAL_NEW == prebuilt ]] && chroot_installpackages "yes"
+	[[ $EXTERNAL_NEW == prebuilt ]] && chroot_installpackages "yes" >> "${DEST}"/debug/install.log 2>&1
 
 	# stage: user customization script
 	# NOTE: installing too many packages may fill tmpfs mount
@@ -108,7 +108,9 @@ create_rootfs_cache()
 	for ((n=0;n<${cycles};n++)); do
 
 		local packages_hash=$(get_package_list_hash "$(($ROOTFSCACHE_VERSION - $n))")
-		local cache_type=$(if [[ ${BUILD_DESKTOP} == yes  ]]; then echo "desktop"; elif [[ ${BUILD_MINIMAL} == yes  ]]; then echo "minimal"; else echo "cli";fi)
+		[[ -z ${FORCED_MONTH_OFFSET} ]] && FORCED_MONTH_OFFSET=${n}
+		local packages_hash=$(get_package_list_hash "$(date -d "$D +${FORCED_MONTH_OFFSET} month" +"%Y-%m-module$ROOTFSCACHE_VERSION" | sed 's/^0*//')")
+		local cache_type=$(if [[ ${BUILD_DESKTOP} == yes  ]]; then echo "xfce-desktop"; elif [[ ${BUILD_MINIMAL} == yes  ]]; then echo "minimal"; else echo "cli";fi)
 		local cache_name=${RELEASE}-${cache_type}-${ARCH}.$packages_hash.tar.lz4
 		local cache_fname=${SRC}/cache/rootfs/${cache_name}
 		local display_name=${RELEASE}-${cache_type}-${ARCH}.${packages_hash:0:3}...${packages_hash:29}.tar.lz4
@@ -211,7 +213,7 @@ create_rootfs_cache()
 
 		# stage: update packages list
 		display_alert "Updating package list" "$RELEASE" "info"
-		eval 'LC_ALL=C LANG=C chroot $SDCARD /bin/bash -c "apt -q -y $apt_extra update"' \
+		eval 'LC_ALL=C LANG=C chroot $SDCARD /bin/bash -c "apt-get -q -y $apt_extra update"' \
 			${PROGRESS_LOG_TO_FILE:+' | tee -a $DEST/debug/debootstrap.log'} \
 			${OUTPUT_DIALOG:+' | dialog --backtitle "$backtitle" --progressbox "Updating package lists..." $TTY_Y $TTY_X'} \
 			${OUTPUT_VERYSILENT:+' >/dev/null 2>/dev/null'}
@@ -220,7 +222,7 @@ create_rootfs_cache()
 
 		# stage: upgrade base packages from xxx-updates and xxx-backports repository branches
 		display_alert "Upgrading base packages" "Armbian" "info"
-		eval 'LC_ALL=C LANG=C chroot $SDCARD /bin/bash -c "DEBIAN_FRONTEND=noninteractive apt -y -q \
+		eval 'LC_ALL=C LANG=C chroot $SDCARD /bin/bash -c "DEBIAN_FRONTEND=noninteractive apt-get -y -q \
 			$apt_extra $apt_extra_progress upgrade"' \
 			${PROGRESS_LOG_TO_FILE:+' | tee -a $DEST/debug/debootstrap.log'} \
 			${OUTPUT_DIALOG:+' | dialog --backtitle "$backtitle" --progressbox "Upgrading base packages..." $TTY_Y $TTY_X'} \
@@ -230,7 +232,7 @@ create_rootfs_cache()
 
 		# stage: install additional packages
 		display_alert "Installing packages for" "Armbian" "info"
-		eval 'LC_ALL=C LANG=C chroot $SDCARD /bin/bash -c "DEBIAN_FRONTEND=noninteractive apt -y -q \
+		eval 'LC_ALL=C LANG=C chroot $SDCARD /bin/bash -c "DEBIAN_FRONTEND=noninteractive apt-get -y -q \
 			$apt_extra $apt_extra_progress --no-install-recommends install $PACKAGE_LIST"' \
 			${PROGRESS_LOG_TO_FILE:+' | tee -a $DEST/debug/debootstrap.log'} \
 			${OUTPUT_DIALOG:+' | dialog --backtitle "$backtitle" --progressbox "Installing Armbian system..." $TTY_Y $TTY_X'} \
@@ -239,11 +241,13 @@ create_rootfs_cache()
 		[[ ${PIPESTATUS[0]} -ne 0 ]] && exit_with_error "Installation of Armbian packages failed"
 
 		# stage: remove downloaded packages
-		chroot $SDCARD /bin/bash -c "apt clean"
+		chroot $SDCARD /bin/bash -c "apt-get clean"
 
 		# DEBUG: print free space
-		echo -e "\nFree space:"
-		eval 'df -h' ${PROGRESS_LOG_TO_FILE:+' | tee -a $DEST/debug/debootstrap.log'}
+		local freespace=$(LC_ALL=C df -h)
+		echo $freespace >> $DEST/debug/debootstrap.log
+		display_alert "Free SD cache" "$(echo -e "$freespace" | grep $SDCARD | awk '{print $5}')" "info"
+		display_alert "Mount point" "$(echo -e "$freespace" | grep $MOUNT | head -1 | awk '{print $5}')" "info"
 
 		# create list of installed packages for debug purposes
 		chroot $SDCARD /bin/bash -c "dpkg --get-selections" | grep -v deinstall | awk '{print $1}' | cut -f1 -d':' > ${cache_fname}.list 2>&1
@@ -313,10 +317,11 @@ prepare_partitions()
 	parttype[fat]=fat16
 	parttype[f2fs]=ext4 # not a copy-paste error
 	parttype[btrfs]=btrfs
+	parttype[xfs]=xfs
 	# parttype[nfs] is empty
 
 	# metadata_csum and 64bit may need to be disabled explicitly when migrating to newer supported host OS releases
-	if [[ $(lsb_release -sc) =~ bionic|buster|bullseye|cosmic|eoan|focal ]]; then
+	if [[ $(lsb_release -sc) =~ bionic|buster|bullseye|cosmic|groovy|focal ]]; then
 		mkopts[ext4]='-q -m 2 -O ^64bit,^metadata_csum'
 	elif [[ $(lsb_release -sc) == xenial ]]; then
 		mkopts[ext4]='-q -m 2'
@@ -325,6 +330,7 @@ prepare_partitions()
 	mkopts[ext2]='-q'
 	# mkopts[f2fs] is empty
 	mkopts[btrfs]='-m dup'
+	# mkopts[xfs] is empty
 	# mkopts[nfs] is empty
 
 	mkfs[ext4]=ext4
@@ -332,13 +338,15 @@ prepare_partitions()
 	mkfs[fat]=vfat
 	mkfs[f2fs]=f2fs
 	mkfs[btrfs]=btrfs
+	mkfs[xfs]=xfs
 	# mkfs[nfs] is empty
 
 	mountopts[ext4]=',commit=600,errors=remount-ro'
 	# mountopts[ext2] is empty
 	# mountopts[fat] is empty
 	# mountopts[f2fs] is empty
-	mountopts[btrfs]=',commit=600,compress=lzo'
+	mountopts[btrfs]=',commit=600'
+	# mountopts[xfs] is empty
 	# mountopts[nfs] is empty
 
 	# default BOOTSIZE to use if not specified
@@ -389,8 +397,12 @@ prepare_partitions()
 		case $ROOTFS_TYPE in
 			btrfs)
 				# Used for server images, currently no swap functionality, so disk space
-				# requirements are rather low since rootfs gets filled with compress-force=zlib
-				local sdsize=$(bc -l <<< "scale=0; (($imagesize * 0.8) / 4 + 1) * 4")
+				if [[ $BTRFS_COMPRESSION == none ]]; then
+					local sdsize=$(bc -l <<< "scale=0; (($imagesize * 1.25) / 4 + 1) * 4")
+				else
+					# requirements are rather low since rootfs gets filled with compress-force=zlib
+					local sdsize=$(bc -l <<< "scale=0; (($imagesize * 0.8) / 4 + 1) * 4")
+				fi
 				;;
 			*)
 				# Hardcoded overhead +25% is needed for desktop images,
@@ -406,8 +418,12 @@ prepare_partitions()
 
 	# stage: create blank image
 	display_alert "Creating blank image for rootfs" "$sdsize MiB" "info"
-	# truncate --size=${sdsize}M ${SDCARD}.raw # sometimes results in fs corruption, revert to previous know to work solution
-	dd if=/dev/zero bs=1M status=none count=$sdsize | pv -p -b -r -s $(( $sdsize * 1024 * 1024 )) -N "[ .... ] dd" | dd status=none of=${SDCARD}.raw
+	if [[ $FAST_CREATE_IMAGE == yes ]]; then
+		truncate --size=${sdsize}M ${SDCARD}.raw # sometimes results in fs corruption, revert to previous know to work solution
+		sync
+	else
+		dd if=/dev/zero bs=1M status=none count=$sdsize | pv -p -b -r -s $(( $sdsize * 1024 * 1024 )) -N "[ .... ] dd" | dd status=none of=${SDCARD}.raw
+	fi
 
 	# stage: calculate boot partition size
 	local bootstart=$(($OFFSET * 2048))
@@ -416,17 +432,17 @@ prepare_partitions()
 
 	# stage: create partition table
 	display_alert "Creating partitions" "${bootfs:+/boot: $bootfs }root: $ROOTFS_TYPE" "info"
-	parted -s ${SDCARD}.raw -- mklabel msdos
+	parted -s ${SDCARD}.raw -- mklabel ${IMAGE_PARTITION_TABLE}
 	if [[ $ROOTFS_TYPE == nfs ]]; then
 		# single /boot partition
-		parted -s ${SDCARD}.raw -- mkpart primary ${parttype[$bootfs]} ${bootstart}s -1s
+		parted -s ${SDCARD}.raw -- mkpart primary ${parttype[$bootfs]} ${bootstart}s 100%
 	elif [[ $BOOTSIZE == 0 ]]; then
 		# single root partition
-		parted -s ${SDCARD}.raw -- mkpart primary ${parttype[$ROOTFS_TYPE]} ${rootstart}s -1s
+		parted -s ${SDCARD}.raw -- mkpart primary ${parttype[$ROOTFS_TYPE]} ${rootstart}s 100%
 	else
 		# /boot partition + root partition
 		parted -s ${SDCARD}.raw -- mkpart primary ${parttype[$bootfs]} ${bootstart}s ${bootend}s
-		parted -s ${SDCARD}.raw -- mkpart primary ${parttype[$ROOTFS_TYPE]} ${rootstart}s -1s
+		parted -s ${SDCARD}.raw -- mkpart primary ${parttype[$ROOTFS_TYPE]} ${rootstart}s 100%
 	fi
 
 	# stage: mount image
@@ -463,9 +479,11 @@ prepare_partitions()
 
 		check_loop_device "$rootdevice"
 		display_alert "Creating rootfs" "$ROOTFS_TYPE on $rootdevice"
-		mkfs.${mkfs[$ROOTFS_TYPE]} ${mkopts[$ROOTFS_TYPE]} $rootdevice
+		mkfs.${mkfs[$ROOTFS_TYPE]} ${mkopts[$ROOTFS_TYPE]} $rootdevice >> "${DEST}"/debug/install.log 2>&1
 		[[ $ROOTFS_TYPE == ext4 ]] && tune2fs -o journal_data_writeback $rootdevice > /dev/null
-		[[ $ROOTFS_TYPE == btrfs ]] && local fscreateopt="-o compress-force=zlib"
+		if [[ $ROOTFS_TYPE == btrfs && $BTRFS_COMPRESSION != none ]]; then
+			local fscreateopt="-o compress-force=${BTRFS_COMPRESSION}"
+		fi
 		mount ${fscreateopt} $rootdevice $MOUNT/
 		# create fstab (and crypttab) entry
 		if [[ $CRYPTROOT_ENABLE == yes ]]; then
@@ -478,9 +496,9 @@ prepare_partitions()
 		echo "$rootfs / ${mkfs[$ROOTFS_TYPE]} defaults,noatime,nodiratime${mountopts[$ROOTFS_TYPE]} 0 1" >> $SDCARD/etc/fstab
 	fi
 	if [[ -n $bootpart ]]; then
-		display_alert "Creating /boot" "$bootfs"
+		display_alert "Creating /boot" "$bootfs on ${LOOP}p${bootpart}"
 		check_loop_device "${LOOP}p${bootpart}"
-		mkfs.${mkfs[$bootfs]} ${mkopts[$bootfs]} ${LOOP}p${bootpart}
+		mkfs.${mkfs[$bootfs]} ${mkopts[$bootfs]} ${LOOP}p${bootpart} >> "${DEST}"/debug/install.log 2>&1
 		mkdir -p $MOUNT/boot/
 		mount ${LOOP}p${bootpart} $MOUNT/boot/
 		echo "UUID=$(blkid -s UUID -o value ${LOOP}p${bootpart}) /boot ${mkfs[$bootfs]} defaults${mountopts[$bootfs]} 0 2" >> $SDCARD/etc/fstab
@@ -512,7 +530,9 @@ prepare_partitions()
 		else
 			sed -i 's/^setenv rootdev .*/setenv rootdev "'$rootfs'"/' $SDCARD/boot/boot.ini
 		fi
-		[[ -f $SDCARD/boot/armbianEnv.txt ]] && rm $SDCARD/boot/armbianEnv.txt
+		if [[  $LINUXFAMILY != meson64 ]]; then
+			[[ -f $SDCARD/boot/armbianEnv.txt ]] && rm $SDCARD/boot/armbianEnv.txt
+		fi
 	fi
 
 	# if we have a headless device, set console to DEFAULT_CONSOLE
@@ -553,7 +573,10 @@ update_initramfs()
 	mount_chroot "$chroot_target/"
 
 	chroot $chroot_target /bin/bash -c "$update_initramfs_cmd" >> $DEST/debug/install.log 2>&1
-	display_alert "Updated initramfs." "for details see: $DEST/debug/install.log" "ext"
+	display_alert "Updated initramfs." "for details see: $DEST/debug/install.log" "info"
+
+	display_alert "Re-enabling" "initramfs-tools hook for kernel"
+	chroot $chroot_target /bin/bash -c "chmod -v +x /etc/kernel/postinst.d/initramfs-tools" >> "${DEST}"/debug/install.log 2>&1
 
 	umount_chroot "$chroot_target/"
 	rm $chroot_target/usr/bin/$QEMU_BINARY
@@ -573,9 +596,9 @@ create_image()
 	[[ $ROOTFS_TYPE == nfs ]] && version=${version}_nfsboot
 
 	if [[ $ROOTFS_TYPE != nfs ]]; then
-		display_alert "Copying files to root directory"
+		display_alert "Copying files to" "/"
 		rsync -aHWXh --exclude="/boot/*" --exclude="/dev/*" --exclude="/proc/*" --exclude="/run/*" --exclude="/tmp/*" \
-			--exclude="/sys/*" --info=progress2,stats1 $SDCARD/ $MOUNT/
+			--exclude="/sys/*" --info=progress2,stats1 $SDCARD/ $MOUNT/ >> "${DEST}"/debug/install.log 2>&1
 	else
 		display_alert "Creating rootfs archive" "rootfs.tgz" "info"
 		tar cp --xattrs --directory=$SDCARD/ --exclude='./boot/*' --exclude='./dev/*' --exclude='./proc/*' --exclude='./run/*' --exclude='./tmp/*' \
@@ -583,21 +606,23 @@ create_image()
 	fi
 
 	# stage: rsync /boot
-	display_alert "Copying files to /boot directory"
+	display_alert "Copying files to" "/boot"
 	if [[ $(findmnt --target $MOUNT/boot -o FSTYPE -n) == vfat ]]; then
 		# fat32
-		rsync -rLtWh --info=progress2,stats1 $SDCARD/boot $MOUNT
+		rsync -rLtWh --info=progress2,stats1 $SDCARD/boot $MOUNT >> "${DEST}"/debug/install.log 2>&1
 	else
 		# ext4
-		rsync -aHWXh --info=progress2,stats1 $SDCARD/boot $MOUNT
+		rsync -aHWXh --info=progress2,stats1 $SDCARD/boot $MOUNT >> "${DEST}"/debug/install.log 2>&1
 	fi
 
 	# stage: create final initramfs
 	update_initramfs $MOUNT
 
 	# DEBUG: print free space
-	display_alert "Free space:" "SD card" "info"
-	eval 'df -h' ${PROGRESS_LOG_TO_FILE:+' | tee -a $DEST/debug/debootstrap.log'}
+	local freespace=$(LC_ALL=C df -h)
+	echo $freespace >> $DEST/debug/debootstrap.log
+	display_alert "Free SD cache" "$(echo -e "$freespace" | grep $SDCARD | awk '{print $5}')" "info"
+	display_alert "Mount point" "$(echo -e "$freespace" | grep $MOUNT | head -1 | awk '{print $5}')" "info"
 
 	# stage: write u-boot
 	write_uboot $LOOP
@@ -622,65 +647,74 @@ create_image()
 	rm -rf --one-file-system $DESTIMG $MOUNT
 
 	mkdir -p $DESTIMG
-	fingerprint_image "$DESTIMG/${version}.img.txt" "${version}"
 	mv ${SDCARD}.raw $DESTIMG/${version}.img
 
-	if [[ $BUILD_ALL != yes ]]; then
+	if [[ -z $SEND_TO_SERVER ]]; then
+
 		if [[ $COMPRESS_OUTPUTIMAGE == "" || $COMPRESS_OUTPUTIMAGE == no ]]; then
 			COMPRESS_OUTPUTIMAGE="sha,gpg,img"
 		elif [[ $COMPRESS_OUTPUTIMAGE == yes ]]; then
 			COMPRESS_OUTPUTIMAGE="sha,gpg,7z"
 		fi
 
-		if [[ $COMPRESS_OUTPUTIMAGE == *sha* || -n $CARD_DEVICE ]]; then
-			cd $DESTIMG
-			display_alert "SHA256 calculating" "${version}.img" "info"
-			sha256sum -b ${version}.img > ${version}.img.sha
-			cp ${version}.img.sha "$DEST/images/${version}.img.sha"
-			cd ..
+		if [[ $COMPRESS_OUTPUTIMAGE == *gz* ]]; then
+			display_alert "Compressing" "$DEST/images/${version}.img.gz" "info"
+			pigz -3 < $DESTIMG/${version}.img > $DEST/images/${version}.img.gz
+			compression_type=".gz"
+		fi
+
+		if [[ $COMPRESS_OUTPUTIMAGE == *xz* ]]; then
+			display_alert "Compressing" "$DEST/images/${version}.img.xz" "info"
+			pixz -3 < $DESTIMG/${version}.img > $DEST/images/${version}.img.xz
+			compression_type=".xz"
+		fi
+
+		if [[ $COMPRESS_OUTPUTIMAGE == *img* || $COMPRESS_OUTPUTIMAGE == *7z* ]]; then
+			mv $DESTIMG/${version}.img $DEST/images/${version}.img || exit 1
+			compression_type=""
+		fi
+
+		if [[ $COMPRESS_OUTPUTIMAGE == *sha* ]]; then
+			cd $DEST/images
+			display_alert "SHA256 calculating" "${version}.img${compression_type}" "info"
+			sha256sum -b ${version}.img${compression_type} > ${version}.img${compression_type}.sha
 		fi
 
 		if [[ $COMPRESS_OUTPUTIMAGE == *gpg* ]]; then
-			cd $DESTIMG
+			cd $DEST/images
 			if [[ -n $GPG_PASS ]]; then
-				display_alert "GPG signing" "${version}.img" "info"
-				echo $GPG_PASS | gpg --passphrase-fd 0 --armor --detach-sign --pinentry-mode loopback --batch --yes ${version}.img || exit 1
-				cp ${version}.img.asc "$DEST/images/${version}.img.asc"
+				display_alert "GPG signing" "${version}.img${compression_type}" "info"
+				echo $GPG_PASS | gpg --passphrase-fd 0 --armor --detach-sign --pinentry-mode loopback --batch --yes $DEST/images/${version}.img${compression_type} || exit 1
 			else
 				display_alert "GPG signing skipped - no GPG_PASS" "${version}.img" "wrn"
 			fi
-			cd ..
 		fi
 
-		# compress image
+		fingerprint_image "$DEST/images/${version}.img${compression_type}.txt" "${version}"
+
 		if [[ $COMPRESS_OUTPUTIMAGE == *7z* ]]; then
-			# copy unlock keys
-			[[ -f $DEST/images/$CRYPTROOT_SSH_UNLOCK_KEY_NAME ]] && \
-			cp $DEST/images/$CRYPTROOT_SSH_UNLOCK_KEY_NAME $DESTIMG/
-			cd $DESTIMG
 			display_alert "Compressing" "$DEST/images/${version}.7z" "info"
 			7za a -t7z -bd -m0=lzma2 -mx=3 -mfb=64 -md=32m -ms=on \
 			$DEST/images/${version}.7z ${version}.key ${version}.img* >/dev/null 2>&1
 			find $DEST/images/ -type \
-			f \( -name "${version}.img" -o -name "${version}.img.asc" -o -name "${version}.img.sha" \) -print0 \
+			f \( -name "${version}.img" -o -name "${version}.img.asc" -o -name "${version}.img.txt" -o -name "${version}.img.sha" \) -print0 \
 			| xargs -0 rm >/dev/null 2>&1
-			cd ..
 		fi
-		if [[ $COMPRESS_OUTPUTIMAGE == *gz* ]]; then
-			display_alert "Compressing" "$DEST/images/${version}.img.gz" "info"
-			pigz -3 < $DESTIMG/${version}.img > $DEST/images/${version}.img.gz
-		fi
-		if [[ $COMPRESS_OUTPUTIMAGE == *xz* ]]; then
-			display_alert "Compressing" "$DEST/images/${version}.img.xz" "info"
-			pixz -3 < $DESTIMG/${version}.img > $DEST/images/${version}.img.xz
-		fi
-		if [[ $COMPRESS_OUTPUTIMAGE == *img* ]]; then
-			[[ -f $DESTIMG/${version}.img.txt ]] && mv $DESTIMG/${version}.img.txt $DEST/images/${version}.img.txt
-			mv $DESTIMG/${version}.img $DEST/images/${version}.img || exit 1
-		fi
+
 		rm -rf $DESTIMG
 	fi
 	display_alert "Done building" "$DEST/images/${version}.img" "info"
+
+	if [[ $BUILD_ALL == yes ]]; then
+		install -d -o nobody -g nogroup -m 775 $DEST/images/${BOARD}/{archive,nightly}
+		if [[ "$BETA" == yes ]]; then
+			install ${INSTALL_PARA} $DEST/images/"${version}"* $DEST/images/"${BOARD}"/nightly
+			rm $DEST/images/"${version}"*
+		else
+			install ${INSTALL_PARA} $DEST/images/"${version}"* $DEST/images/"${BOARD}"/archive
+			rm $DEST/images/"${version}"*
+		fi
+	fi
 
 	# call custom post build hook
 	[[ $(type -t post_build_image) == function ]] && post_build_image "$DEST/images/${version}.img"

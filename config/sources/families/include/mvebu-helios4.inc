@@ -1,12 +1,12 @@
 case $BRANCH in
 
-	legacy|current)
+	legacy|current|dev)
 
 		BOOTSOURCE=$MAINLINE_UBOOT_SOURCE
 		BOOTBRANCH='tag:v2019.04'
 		BOOTDIR=$MAINLINE_UBOOT_DIR
 		BOOTPATCHDIR='u-boot-helios4'
-		BOOTSCRIPT='boot-mvebu-next.cmd:boot.cmd'
+		BOOTSCRIPT='boot-mvebu.cmd:boot.cmd'
 
 		UBOOT_TARGET_MAP=";sdhc;u-boot-spl.kwb:u-boot.mmc
 				  ;spi;u-boot-spl.kwb:u-boot.flash
@@ -14,11 +14,6 @@ case $BRANCH in
 
 		UBOOT_USE_GCC='> 7.0'
 
-		OVERLAY_PREFIX='armada-388-helios4'
-
-	;;
-
-	dev)
 		OVERLAY_PREFIX='armada-388-helios4'
 	;;
 
