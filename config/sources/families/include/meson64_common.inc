@@ -1,6 +1,6 @@
 UBOOT_TARGET_MAP="u-boot-dtb.img;;u-boot.bin.sd.bin:u-boot.bin u-boot-dtb.img"
 BOOTSCRIPT="boot-meson64.cmd:boot.cmd"
-BOOTENV_FILE='meson64-next.txt'
+BOOTENV_FILE='meson.txt'
 LINUXFAMILY=meson64
 ARCH=arm64
 SERIALCON=ttyAML0
@@ -19,11 +19,21 @@ CPUMAX=1536000
 GOVERNOR=conservative
 
 case $BRANCH in
+	
+	legacy)
+		KERNELSOURCE='https://github.com/hardkernel/linux'
+		KERNELBRANCH='branch:odroidg12-4.9.y'
+		KERNELDIR='linux-odroid'
+	;;
+
+        current)
+                KERNELBRANCH='branch:linux-5.9.y'
+                KERNELPATCHDIR='meson64-current'
+        ;;
 
         dev)
-
-		KERNELBRANCH='branch:linux-5.6.y'
-
+                KERNELBRANCH='branch:linux-5.9.y'
+                KERNELPATCHDIR='meson64-dev'
         ;;
 
 esac
@@ -142,7 +152,44 @@ uboot_g12_postprocess()
 			--ddrfw8 $1/aml_ddr.fw \
 			--level v3
 	fi
+
 }
+
+# this helper function includes postprocess for meson gxl and gxm.
+# $1 PATH for uboot blob repo
+uboot_gxl_postprocess_ng()
+{
+    mv u-boot.bin bl33.bin
+
+    $1/blx_fix.sh $1/bl30.bin \
+                       $1/zero_tmp \
+                       $1/bl30_zero.bin \
+                       $1/bl301.bin \
+                       $1/bl301_zero.bin \
+                       $1/bl30_new.bin bl30
+
+    python3 $1/acs_tool.py $1/bl2.bin $1/bl2_acs.bin $1/acs.bin 0
+
+    $1/blx_fix.sh $1/bl2_acs.bin \
+                       $1/zero_tmp \
+                       $1/bl2_zero.bin \
+                       $1/bl21.bin \
+                       $1/bl21_zero.bin \
+                       $1/bl2_new.bin bl2
+
+    $1/aml_encrypt_gxl --bl3enc --input $1/bl30_new.bin
+    $1/aml_encrypt_gxl --bl3enc --input $1/bl31.img
+    $1/aml_encrypt_gxl --bl3enc --input bl33.bin
+    $1/aml_encrypt_gxl --bl2sig --input $1/bl2_new.bin \
+			--output bl2.n.bin.sig
+
+    $1/aml_encrypt_gxl --bootmk --output u-boot.bin \
+			--bl2 $1/bl2.n.bin.sig \
+			--bl30 $1/bl30_new.bin.enc \
+			--bl31 $1/bl31.img.enc \
+			--bl33 bl33.bin.enc
+}
+
 
 write_uboot_platform()
 {

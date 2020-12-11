@@ -8,9 +8,9 @@ index 92d796a33..24a6c304f 100644
  dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3328-evb.dtb
 +dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3328-nanopi-r2-rev00.dtb
 +dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3328-nanopi-r2-rev20.dtb
+ dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3328-nanopi-r2s.dtb
  dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3328-rock64.dtb
  dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3328-roc-cc.dtb
- dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3368-evb-act8846.dtb
 diff --git a/arch/arm64/boot/dts/rockchip/rk3328-dram-default-timing.dtsi b/arch/arm64/boot/dts/rockchip/rk3328-dram-default-timing.dtsi
 new file mode 100644
 index 000000000..a3f5ff4bd
@@ -333,7 +333,7 @@ new file mode 100644
 index 000000000..36890bb7f
 --- /dev/null
 +++ b/arch/arm64/boot/dts/rockchip/rk3328-nanopi-r2-common.dtsi
-@@ -0,0 +1,624 @@
+@@ -0,0 +1,625 @@
 +// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
 +/*
 + * Copyright (c) 2018 FriendlyElec Computer Tech. Co., Ltd.
@@ -422,7 +422,8 @@ index 000000000..36890bb7f
 +		compatible = "regulator-fixed";
 +		gpio = <&gpio0 30 GPIO_ACTIVE_LOW>;
 +		pinctrl-names = "default";
-+		pinctrl-0 = <&sdmmc0m1_gpio>;
++		pinctrl-0 = <&sdmmc0m1_pin>;
++		regulator-boot-on;
 +		regulator-name = "vcc_sd";
 +		regulator-min-microvolt = <3300000>;
 +		regulator-max-microvolt = <3300000>;
