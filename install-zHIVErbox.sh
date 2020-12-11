@@ -1431,10 +1431,12 @@ reencrypt_using_trezor_entropy()
     # encrypt partition via named pipes for passphrase and master key
     display_alert "\e[0;31mEncrypting $PROJNAME root partition with a new volume key now...\x1B[0m" "" ""
 
-    echo "cryptsetup luksFormat -h sha512 -s 512 --uuid=$SRC_LUKS_UUID --master-key-file=$TMP_BUILD_DIR/trezor-entropy --key-file=$TMP_BUILD_DIR/passphrase ${LOOP_DEST}p${ROOTPART}"
+    # limit cryptsetup 2.1 to 256MB Argon2i memory
+    # https://gitlab.com/cryptsetup/cryptsetup/-/issues/372
+    echo "cryptsetup luksFormat -h sha512 -s 512 --pbkdf-memory 262144 --uuid=$SRC_LUKS_UUID --master-key-file=$TMP_BUILD_DIR/trezor-entropy --key-file=$TMP_BUILD_DIR/passphrase ${LOOP_DEST}p${ROOTPART}"
     echo -e "\e[0;31mPlease check the display of your Trezor and press 'Confirm'!\x1B[0m"
     # we need to use the same uuid, else initramfs won't find the configured (in boot.ini) root device anymore
-    cryptsetup luksFormat -v -q -h sha512 -s 512 --uuid=$SRC_LUKS_UUID --master-key-file=$TMP_BUILD_DIR/trezor-entropy --key-file=$TMP_BUILD_DIR/passphrase ${LOOP_DEST}p${ROOTPART}
+    cryptsetup luksFormat -v -q -h sha512 -s 512 ---pbkdf-memory 262144 -uuid=$SRC_LUKS_UUID --master-key-file=$TMP_BUILD_DIR/trezor-entropy --key-file=$TMP_BUILD_DIR/passphrase ${LOOP_DEST}p${ROOTPART}
     echo ""
     cryptsetup luksDump ${LOOP_DEST}p${ROOTPART}
 
@@ -1531,7 +1533,9 @@ EOF
     display_alert "Start:" "cryptsetup-reencrypt $cryptopts ${LOOP_DEST}p${ROOTPART}" ""
     echo -n "............................................." | sed "s/^/${SED_INTEND}/"
     printf '\r'
-    cryptsetup-reencrypt $cryptopts ${LOOP_DEST}p${ROOTPART} --key-file $TMP_BUILD_DIR/sourcepass >> $INST_LOG
+    # limit cryptsetup 2.1 to 256MB Argon2i memory
+    # https://gitlab.com/cryptsetup/cryptsetup/-/issues/372
+    cryptsetup-reencrypt $cryptopts ${LOOP_DEST}p${ROOTPART} --pbkdf-memory 262144 --key-file $TMP_BUILD_DIR/sourcepass >> $INST_LOG
     cryptsetup luksDump ${LOOP_DEST}p${ROOTPART} >> $INST_LOG 2>&1
     echo ""
     display_alert "The $ZHIVERBOX_NAME root partition is now ecrypted with a new unique volume key!" "" "ext"
@@ -1799,6 +1803,18 @@ replace_default_dropbear_ssh_key()
     find . | cpio -H newc -o | gzip > $INITRD_IMAGE 2>>$INST_LOG
     chmod +r $INITRD_IMAGE
     echo ""
+
+    display_alert "Verify boot system (initramfs) contains cryptroot-unlock software" "lsinitramfs $INITRD_IMAGE | grep cryptroot-unlock"
+    lsinitramfs $INITRD_IMAGE | grep -q cryptroot-unlock || {\
+        display_alert "cryptroot-unlock is missing in the boot system (initramfs)." "CRITICAL ERROR" "err" && \
+        display_alert "The selected source image seems to be broken:" "$SRC_IMAGE_FILE" "err" && \
+        display_alert "Please get another source image which isn't broken." "ABORTING INSTALLATION" "err" && \
+        press_any_key && exit 1
+    }
+    # all good, continue 
+    lsinitramfs $INITRD_IMAGE | grep cryptroot
+    echo ""
+
     display_alert "Recreating boot system uBoot image file (initramfs)" "mkimage -A arm -O linux -T ramdisk -C gzip -d $INITRD_IMAGE_NAME $UINITRD_IMAGE_NAME" ""
     cd $MOUNT_DEST_BOOT
     mkimage -A arm -O linux -T ramdisk -C gzip -d $INITRD_IMAGE_NAME $UINITRD_IMAGE_NAME 2>>$INST_LOG
@@ -2074,6 +2090,7 @@ sign_initramfs()
     done
     cd $current_dir
 
+    $CMD_GPG -K
     $CMD_GPG --output $SIGNED_SHASUMS_FILE --yes --clearsign --armor $TMP_SHASUMS_FILE
     cat $SIGNED_SHASUMS_FILE >> $INST_LOG 2>&1
     echo ""
@@ -2345,7 +2362,7 @@ change_device_name
 gpg_export_public_key
 
 # configure notifications receipient
-bitmessage_messaging_preface
+#bitmessage_messaging_preface
 
 # cjdns installation
 cjdns_networking_preface
